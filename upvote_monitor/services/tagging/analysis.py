@@ -8,7 +8,13 @@ from typing import Protocol
 
 from sqlmodel import Session, col, select
 
-from upvote_monitor.db.models import AppSettings, MediaAnalysis, MediaAttachment, ReviewItem
+from upvote_monitor.db.models import (
+    AnalysisProfile,
+    AppSettings,
+    MediaAnalysis,
+    MediaAttachment,
+    ReviewItem,
+)
 from upvote_monitor.enums import AnalysisStatus, ApprovalStatus
 from upvote_monitor.services.preview_cache import (
     delete_item_preview_cache,
@@ -16,10 +22,10 @@ from upvote_monitor.services.preview_cache import (
     is_cacheable_preview_url,
 )
 from upvote_monitor.services.tagging.scoring import score_illustration
+from upvote_monitor.services.tagging.profiles import active_analysis_profile
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult, get_wd_tagger
 
 logger = logging.getLogger(__name__)
-DEFAULT_TAG_PERSISTENCE_THRESHOLD = 0.15
 
 
 class ImageTagger(Protocol):
@@ -56,9 +62,14 @@ def process_pending_analysis(
     if settings is None or not settings.illustration_tagger_enabled:
         return AnalysisBatchResult()
 
+    profile = active_analysis_profile(session)
+    if profile is None:
+        logger.error("No active illustration analysis profile is configured")
+        return AnalysisBatchResult()
+
     if tagger is None:
         try:
-            tagger = _default_tagger()
+            tagger = _default_tagger(profile)
         except TaggerUnavailableError:
             logger.exception("Illustration tagger could not be initialized")
             return AnalysisBatchResult()
@@ -74,14 +85,15 @@ def process_pending_analysis(
         item_result = _analyze_item(
             session,
             item,
+            profile,
             tagger,
             force=False,
             auto_approve_threshold=(
-                settings.illustration_auto_approve_threshold
+                profile.auto_approve_threshold
                 if settings.illustration_auto_approve_enabled
                 else None
             ),
-            tag_persistence_threshold=settings.illustration_tag_persistence_threshold,
+            tag_persistence_threshold=profile.tag_persistence_threshold,
         )
         result.analyzed += item_result.analyzed
         result.skipped += item_result.skipped
@@ -97,21 +109,21 @@ def analyze_item(
     item: ReviewItem,
     tagger: ImageTagger | None = None,
 ) -> AnalysisBatchResult:
-    if tagger is None:
-        tagger = _default_tagger()
+    profile = active_analysis_profile(session)
+    if profile is None:
+        raise TaggerUnavailableError("No active illustration analysis profile is configured")
 
-    settings = session.get(AppSettings, 1)
+    if tagger is None:
+        tagger = _default_tagger(profile)
+
     result = _analyze_item(
         session,
         item,
+        profile,
         tagger,
         force=True,
         auto_approve_threshold=None,
-        tag_persistence_threshold=(
-            settings.illustration_tag_persistence_threshold
-            if settings is not None
-            else DEFAULT_TAG_PERSISTENCE_THRESHOLD
-        ),
+        tag_persistence_threshold=profile.tag_persistence_threshold,
     )
     session.commit()
     return result
@@ -123,17 +135,40 @@ def get_attachment_analysis(
 ) -> MediaAnalysis | None:
     if attachment_id is None:
         return None
+    profile = active_analysis_profile(session)
+    if profile is None:
+        return None
     return session.exec(
         select(MediaAnalysis)
         .where(MediaAnalysis.attachment_id == attachment_id)
+        .where(MediaAnalysis.analysis_profile_id == profile.id)
         .order_by(col(MediaAnalysis.analyzed_at).desc())
     ).first()
+
+
+def get_attachment_analyses(
+    session: Session,
+    attachment_id: int | None,
+) -> list[MediaAnalysis]:
+    if attachment_id is None:
+        return []
+    return list(
+        session.exec(
+            select(MediaAnalysis)
+            .where(MediaAnalysis.attachment_id == attachment_id)
+            .order_by(col(MediaAnalysis.analyzed_at).desc())
+        ).all()
+    )
 
 
 def get_item_analysis_summary(
     session: Session,
     item_id: str,
 ) -> ItemAnalysisSummary:
+    profile = active_analysis_profile(session)
+    if profile is None:
+        return ItemAnalysisSummary(status=None, illustration_score=None)
+
     rows = session.exec(
         select(MediaAnalysis)
         .join(
@@ -141,6 +176,7 @@ def get_item_analysis_summary(
             col(MediaAttachment.id) == col(MediaAnalysis.attachment_id),
         )
         .where(MediaAttachment.item_id == item_id)
+        .where(MediaAnalysis.analysis_profile_id == profile.id)
     ).all()
     if not rows:
         return ItemAnalysisSummary(status=None, illustration_score=None)
@@ -187,7 +223,7 @@ def _image_attachments_for_item(
 def _existing_item_scores(
     session: Session,
     item_id: str,
-    tagger: ImageTagger,
+    profile: AnalysisProfile,
 ) -> list[float]:
     rows = session.exec(
         select(MediaAnalysis)
@@ -196,8 +232,7 @@ def _existing_item_scores(
             col(MediaAttachment.id) == col(MediaAnalysis.attachment_id),
         )
         .where(MediaAttachment.item_id == item_id)
-        .where(MediaAnalysis.model_name == tagger.model_name)
-        .where(MediaAnalysis.model_version == tagger.model_version)
+        .where(MediaAnalysis.analysis_profile_id == profile.id)
         .where(MediaAnalysis.status == AnalysisStatus.COMPLETED)
     ).all()
     return [row.illustration_score for row in rows if row.illustration_score is not None]
@@ -206,6 +241,7 @@ def _existing_item_scores(
 def _analyze_item(
     session: Session,
     item: ReviewItem,
+    profile: AnalysisProfile,
     tagger: ImageTagger,
     *,
     force: bool,
@@ -213,19 +249,20 @@ def _analyze_item(
     tag_persistence_threshold: float,
 ) -> AnalysisBatchResult:
     result = AnalysisBatchResult()
-    scores = _existing_item_scores(session, item.id, tagger) if not force else []
+    scores = _existing_item_scores(session, item.id, profile) if not force else []
     attachments = _image_attachments_for_item(session, item.id)
 
     for attachment in attachments:
         if attachment.id is None:
             continue
-        existing = _existing_analysis(session, attachment.id, tagger)
+        existing = _existing_analysis(session, attachment.id, profile)
         if existing is not None and not force:
             continue
 
         analysis = _analyze_attachment(
             item,
             attachment,
+            profile,
             tagger,
             tag_persistence_threshold=tag_persistence_threshold,
         )
@@ -259,19 +296,19 @@ def _analyze_item(
 def _existing_analysis(
     session: Session,
     attachment_id: int,
-    tagger: ImageTagger,
+    profile: AnalysisProfile,
 ) -> MediaAnalysis | None:
     return session.exec(
         select(MediaAnalysis)
         .where(MediaAnalysis.attachment_id == attachment_id)
-        .where(MediaAnalysis.model_name == tagger.model_name)
-        .where(MediaAnalysis.model_version == tagger.model_version)
+        .where(MediaAnalysis.analysis_profile_id == profile.id)
     ).first()
 
 
 def _analyze_attachment(
     item: ReviewItem,
     attachment: MediaAttachment,
+    profile: AnalysisProfile,
     tagger: ImageTagger,
     *,
     tag_persistence_threshold: float,
@@ -281,7 +318,7 @@ def _analyze_attachment(
     if not is_cacheable_preview_url(preview_url):
         return _analysis_result(
             attachment.id,
-            tagger,
+            profile,
             AnalysisStatus.SKIPPED,
             error="Preview URL is not cacheable",
         )
@@ -296,7 +333,7 @@ def _analyze_attachment(
     except Exception as exc:
         return _analysis_result(
             attachment.id,
-            tagger,
+            profile,
             AnalysisStatus.FAILED,
             error=str(exc),
         )
@@ -313,7 +350,7 @@ def _analyze_attachment(
     )
     return _analysis_result(
         attachment.id,
-        tagger,
+        profile,
         AnalysisStatus.COMPLETED,
         illustration_score=score,
         tags_json=json.dumps(tags, sort_keys=True),
@@ -326,7 +363,7 @@ def _analyze_attachment(
 
 def _analysis_result(
     attachment_id: int,
-    tagger: ImageTagger,
+    profile: AnalysisProfile,
     status: AnalysisStatus,
     *,
     illustration_score: float | None = None,
@@ -336,8 +373,10 @@ def _analysis_result(
 ) -> MediaAnalysis:
     return MediaAnalysis(
         attachment_id=attachment_id,
-        model_name=tagger.model_name,
-        model_version=tagger.model_version,
+        analysis_profile_id=profile.id,
+        model_name=profile.model_name,
+        model_version=profile.model_version,
+        scoring_version=profile.scoring_version,
         status=status,
         illustration_score=illustration_score,
         tags_json=tags_json,
@@ -348,6 +387,10 @@ def _analysis_result(
 
 
 def _replace_analysis(target: MediaAnalysis, source: MediaAnalysis) -> None:
+    target.analysis_profile_id = source.analysis_profile_id
+    target.model_name = source.model_name
+    target.model_version = source.model_version
+    target.scoring_version = source.scoring_version
     target.status = source.status
     target.illustration_score = source.illustration_score
     target.tags_json = source.tags_json
@@ -395,9 +438,9 @@ def _maybe_auto_approve_item(
     return True
 
 
-def _default_tagger() -> ImageTagger:
+def _default_tagger(profile: AnalysisProfile) -> ImageTagger:
     try:
-        return get_wd_tagger()
+        return get_wd_tagger(profile.model_name, profile.model_version)
     except Exception as exc:
         raise TaggerUnavailableError(
             "Illustration tagger could not be initialized"

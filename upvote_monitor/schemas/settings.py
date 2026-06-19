@@ -1,7 +1,7 @@
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, Field, field_validator
 
-from upvote_monitor.db.models import AppSettings, SourceSettings
+from upvote_monitor.db.models import AnalysisProfile, AppSettings, SourceSettings
 from upvote_monitor.enums import ApprovalMode
 from upvote_monitor.services.secrets import (
     SecretStore,
@@ -141,6 +141,30 @@ class SourceSettingsResponse(BaseModel):
     x: XSourceSettingsResponse
 
 
+class AnalysisProfileResponse(BaseModel):
+    id: str
+    name: str
+    model_name: str
+    model_version: str
+    scoring_version: str
+    tag_persistence_threshold: float
+    auto_approve_threshold: float
+    enabled: bool
+
+    @classmethod
+    def from_db(cls, profile: AnalysisProfile) -> "AnalysisProfileResponse":
+        return cls(
+            id=profile.id,
+            name=profile.name,
+            model_name=profile.model_name,
+            model_version=profile.model_version,
+            scoring_version=profile.scoring_version,
+            tag_persistence_threshold=profile.tag_persistence_threshold,
+            auto_approve_threshold=profile.auto_approve_threshold,
+            enabled=profile.enabled,
+        )
+
+
 class SettingsResponse(BaseModel):
     approval_mode: str
     refresh_cron: str
@@ -148,8 +172,8 @@ class SettingsResponse(BaseModel):
     download_base_dir: str
     illustration_tagger_enabled: bool
     illustration_auto_approve_enabled: bool
-    illustration_auto_approve_threshold: float
-    illustration_tag_persistence_threshold: float
+    active_analysis_profile_id: str
+    analysis_profiles: list[AnalysisProfileResponse]
     sources: SourceSettingsResponse
 
     @classmethod
@@ -159,6 +183,7 @@ class SettingsResponse(BaseModel):
         reddit_settings: SourceSettings | None,
         x_settings: SourceSettings | None,
         secret_store: SecretStore,
+        analysis_profiles: list[AnalysisProfile],
     ) -> "SettingsResponse":
         return cls(
             approval_mode=settings.approval_mode.value,
@@ -169,12 +194,11 @@ class SettingsResponse(BaseModel):
             illustration_auto_approve_enabled=(
                 settings.illustration_auto_approve_enabled
             ),
-            illustration_auto_approve_threshold=(
-                settings.illustration_auto_approve_threshold
-            ),
-            illustration_tag_persistence_threshold=(
-                settings.illustration_tag_persistence_threshold
-            ),
+            active_analysis_profile_id=settings.active_analysis_profile_id,
+            analysis_profiles=[
+                AnalysisProfileResponse.from_db(profile)
+                for profile in analysis_profiles
+            ],
             sources=SourceSettingsResponse(
                 reddit=RedditSourceSettingsResponse.from_db(
                     reddit_settings,
@@ -251,16 +275,7 @@ class SettingsUpdate(BaseModel):
     download_base_dir: str | None = None
     illustration_tagger_enabled: bool | None = None
     illustration_auto_approve_enabled: bool | None = None
-    illustration_auto_approve_threshold: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-    )
-    illustration_tag_persistence_threshold: float | None = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-    )
+    active_analysis_profile_id: str | None = None
     sources: SourceSettingsUpdate | None = None
 
     @field_validator("refresh_cron")

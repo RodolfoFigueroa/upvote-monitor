@@ -15,6 +15,8 @@ from upvote_monitor.enums import (
     RefreshRunStatus,
 )
 
+DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-default"
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -71,21 +73,35 @@ class MediaAttachment(SQLModel, table=True):
     download_strategy: DownloadStrategy = Field(default=DownloadStrategy.HTTP)
 
 
+class AnalysisProfile(SQLModel, table=True):
+    __tablename__ = "analysis_profiles"
+
+    id: str = Field(primary_key=True)
+    name: str
+    model_name: str = Field(index=True)
+    model_version: str = Field(default="main", index=True)
+    scoring_version: str = Field(default="illustration-v1", index=True)
+    tag_persistence_threshold: float = Field(default=0.15)
+    auto_approve_threshold: float = Field(default=0.90)
+    enabled: bool = Field(default=True)
+
+
 class MediaAnalysis(SQLModel, table=True):
     __tablename__ = "media_analyses"
     __table_args__ = (
         UniqueConstraint(
             "attachment_id",
-            "model_name",
-            "model_version",
-            name="uq_media_analysis_attachment_model",
+            "analysis_profile_id",
+            name="uq_media_analysis_attachment_profile",
         ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     attachment_id: int = Field(foreign_key="media_attachments.id", index=True)
+    analysis_profile_id: str = Field(foreign_key="analysis_profiles.id", index=True)
     model_name: str = Field(index=True)
     model_version: str = Field(default="main", index=True)
+    scoring_version: str = Field(default="illustration-v1", index=True)
     status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED, index=True)
     illustration_score: float | None = Field(default=None, index=True)
     tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
@@ -104,8 +120,7 @@ class AppSettings(SQLModel, table=True):
     download_base_dir: str = Field(default="/download")
     illustration_tagger_enabled: bool = Field(default=False)
     illustration_auto_approve_enabled: bool = Field(default=False)
-    illustration_auto_approve_threshold: float = Field(default=0.90)
-    illustration_tag_persistence_threshold: float = Field(default=0.15)
+    active_analysis_profile_id: str = Field(default=DEFAULT_ANALYSIS_PROFILE_ID)
 
 
 class SourceSettings(SQLModel, table=True):

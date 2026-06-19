@@ -1,13 +1,15 @@
 <script lang="ts">
   import {
     CircleAlert,
+    ChevronDown,
+    ChevronUp,
     Download,
     ExternalLink,
     Tags,
   } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
   import { formatDate, sourceLabel } from '$lib/format';
-  import type { ItemDetail, ItemFile, ItemSummary } from '$lib/types/api';
+  import type { ItemDetail, ItemFile, ItemSummary, MediaAnalysis } from '$lib/types/api';
   import MediaPreview from './MediaPreview.svelte';
   import StatusBadge from './StatusBadge.svelte';
 
@@ -36,6 +38,7 @@
   const compactTagLimit = 8;
 
   let showAllTags = $state(false);
+  let showAllAnalyses = $state(false);
   let currentItemId = $state<string | null>(null);
 
   const panelHeading = $derived(heading ?? item.title);
@@ -50,6 +53,7 @@
     if (item.id !== currentItemId) {
       currentItemId = item.id;
       showAllTags = false;
+      showAllAnalyses = false;
     }
   });
 
@@ -80,6 +84,32 @@
 
   function hasHiddenAnalysisTags(value: ItemDetail | null): boolean {
     return allAnalysisTags(value).length > compactTagLimit;
+  }
+
+  function analysisEntries(value: ItemDetail | null) {
+    return (
+      value?.media.flatMap((media) =>
+        media.analyses.map((analysis) => ({
+          sortIndex: media.sort_index,
+          analysis,
+          active: media.analysis?.analysis_profile_id === analysis.analysis_profile_id,
+        }))
+      ) ?? []
+    );
+  }
+
+  function shortModelName(value: string): string {
+    return value.split('/').at(-1) ?? value;
+  }
+
+  function analysisLabel(analysis: MediaAnalysis): string {
+    return `${shortModelName(analysis.model_name)} · ${analysis.model_version}`;
+  }
+
+  function topTags(analysis: MediaAnalysis): [string, number][] {
+    return Object.entries(analysis.tags)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
   }
 </script>
 
@@ -155,6 +185,47 @@
           >
             {showAllTags ? 'Show fewer tags' : `Show all ${allAnalysisTags(tagDetail).length} tags`}
           </button>
+        </div>
+      {/if}
+    {/if}
+
+    {#if analysisEntries(tagDetail).length > 0}
+      <div class="actions-row" style="margin-top: 8px;">
+        <button
+          class="button"
+          data-tone="quiet"
+          onclick={() => {
+            showAllAnalyses = !showAllAnalyses;
+          }}
+        >
+          {#if showAllAnalyses}
+            <ChevronUp size={16} />
+          {:else}
+            <ChevronDown size={16} />
+          {/if}
+          {showAllAnalyses ? 'Hide analyses' : `Show ${analysisEntries(tagDetail).length} analyses`}
+        </button>
+      </div>
+      {#if showAllAnalyses}
+        <div class="analysis-stack">
+          {#each analysisEntries(tagDetail) as entry}
+            <div class="analysis-row" data-active={entry.active}>
+              <div>
+                <strong>{analysisLabel(entry.analysis)}</strong>
+                <p>
+                  media {entry.sortIndex + 1} · {entry.analysis.scoring_version} · {entry.active ? 'current' : entry.analysis.analysis_profile_id}
+                </p>
+              </div>
+              <span>{scorePercent(entry.analysis.illustration_score)}</span>
+              {#if topTags(entry.analysis).length > 0}
+                <div class="chip-row">
+                  {#each topTags(entry.analysis) as [tag, score]}
+                    <span class="chip">{tag}: {scorePercent(score)}</span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
         </div>
       {/if}
     {/if}

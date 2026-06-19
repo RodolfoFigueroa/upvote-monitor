@@ -14,8 +14,7 @@
     download_base_dir: string;
     illustration_tagger_enabled: boolean;
     illustration_auto_approve_enabled: boolean;
-    illustration_auto_approve_threshold: number;
-    illustration_tag_persistence_threshold: number;
+    active_analysis_profile_id: string;
   };
 
   const defaultDraft: GeneralDraft = {
@@ -25,8 +24,7 @@
     download_base_dir: '/data/downloads',
     illustration_tagger_enabled: false,
     illustration_auto_approve_enabled: false,
-    illustration_auto_approve_threshold: 0.9,
-    illustration_tag_persistence_threshold: 0.15,
+    active_analysis_profile_id: 'wd-swinv2-v3-default',
   };
 
   let settings = $state<SettingsResponse | null>(null);
@@ -38,6 +36,11 @@
   let message = $state<string | null>(null);
 
   let dirty = $derived(savedDraft !== null && !sameGeneralDraft(draft, savedDraft));
+  const activeProfile = $derived(
+    settings?.analysis_profiles.find(
+      (profile) => profile.id === draft.active_analysis_profile_id
+    ) ?? null
+  );
 
   function toGeneralDraft(value: SettingsResponse): GeneralDraft {
     return {
@@ -47,8 +50,7 @@
       download_base_dir: value.download_base_dir,
       illustration_tagger_enabled: value.illustration_tagger_enabled,
       illustration_auto_approve_enabled: value.illustration_auto_approve_enabled,
-      illustration_auto_approve_threshold: value.illustration_auto_approve_threshold,
-      illustration_tag_persistence_threshold: value.illustration_tag_persistence_threshold,
+      active_analysis_profile_id: value.active_analysis_profile_id,
     };
   }
 
@@ -60,8 +62,7 @@
       a.download_base_dir === b.download_base_dir &&
       a.illustration_tagger_enabled === b.illustration_tagger_enabled &&
       a.illustration_auto_approve_enabled === b.illustration_auto_approve_enabled &&
-      a.illustration_auto_approve_threshold === b.illustration_auto_approve_threshold &&
-      a.illustration_tag_persistence_threshold === b.illustration_tag_persistence_threshold
+      a.active_analysis_profile_id === b.active_analysis_profile_id
     );
   }
 
@@ -98,8 +99,7 @@
           download_base_dir: draft.download_base_dir,
           illustration_tagger_enabled: draft.illustration_tagger_enabled,
           illustration_auto_approve_enabled: draft.illustration_auto_approve_enabled,
-          illustration_auto_approve_threshold: draft.illustration_auto_approve_threshold,
-          illustration_tag_persistence_threshold: draft.illustration_tag_persistence_threshold,
+          active_analysis_profile_id: draft.active_analysis_profile_id,
         })
       );
       message = 'Settings saved';
@@ -180,29 +180,26 @@
           Auto-approve matching images
         </label>
         <div class="field">
-          <span>Auto-approve threshold</span>
-          <input
-            class="input"
-            type="number"
-            min="0"
-            max="1"
-            step="0.01"
-            bind:value={draft.illustration_auto_approve_threshold}
-            disabled={!draft.illustration_tagger_enabled}
-          />
+          <span>Analysis profile</span>
+          <select
+            class="select"
+            bind:value={draft.active_analysis_profile_id}
+          >
+            {#each settings?.analysis_profiles.filter((profile) => profile.enabled) ?? [] as profile}
+              <option value={profile.id}>{profile.name}</option>
+            {/each}
+          </select>
         </div>
-        <div class="field">
-          <span>Tag persistence threshold</span>
-          <input
-            class="input"
-            type="number"
-            min="0"
-            max="1"
-            step="0.01"
-            bind:value={draft.illustration_tag_persistence_threshold}
-            disabled={!draft.illustration_tagger_enabled}
-          />
-        </div>
+        {#if activeProfile}
+          <div class="notice" style="grid-column: 1 / -1; align-items: flex-start;">
+            <div>
+              <strong>{activeProfile.model_name}</strong>
+              <p>
+                {activeProfile.model_version} · {activeProfile.scoring_version} · approve {Math.round(activeProfile.auto_approve_threshold * 100)}% · show tags {Math.round(activeProfile.tag_persistence_threshold * 100)}%
+              </p>
+            </div>
+          </div>
+        {/if}
       </div>
     </section>
 

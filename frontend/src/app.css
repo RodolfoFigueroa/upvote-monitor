@@ -822,6 +822,50 @@
     font-weight: 700;
   }
 
+  .analysis-stack {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .analysis-row {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    background: rgb(255 255 255 / 3%);
+    padding: 10px;
+  }
+
+  .analysis-row[data-active='true'] {
+    border-color: rgb(91 214 179 / 38%);
+    background: rgb(91 214 179 / 7%);
+  }
+
+  .analysis-row strong {
+    display: block;
+    color: var(--text);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .analysis-row p {
+    margin: 2px 0 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .analysis-row > span {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 820;
+  }
+
+  .analysis-row .chip-row {
+    margin: 0;
+  }
+
   .item-table {
     overflow: hidden;
   }

@@ -8,6 +8,7 @@ from upvote_monitor.services.preview_cache import (
     ensure_preview_cache_dir,
 )
 from upvote_monitor.services.source_settings import ensure_default_source_settings
+from upvote_monitor.services.tagging.profiles import ensure_default_analysis_profiles
 
 DATA_DIR = Path("/data")
 DATABASE_URL = f"sqlite:///{(DATA_DIR / 'upvote_monitor.db').as_posix()}"
@@ -43,6 +44,7 @@ def init_db() -> bool:
             session.refresh(settings)
 
         ensure_default_source_settings(session)
+        ensure_default_analysis_profiles(session)
         _ensure_download_dir(settings.download_base_dir)
         cleanup_stale_preview_cache(session)
 

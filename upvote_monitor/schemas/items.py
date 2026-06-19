@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from upvote_monitor.db.models import MediaAnalysis, MediaAttachment, ReviewItem
@@ -14,6 +14,7 @@ from upvote_monitor.services.download import (
 from upvote_monitor.services.preview_cache import localize_preview_urls
 from upvote_monitor.services.tagging.analysis import (
     get_attachment_analysis,
+    get_attachment_analyses,
     get_item_analysis_summary,
 )
 
@@ -38,6 +39,7 @@ class MediaAttachmentResponse(BaseModel):
     extension: str | None
     download_strategy: str
     analysis: "MediaAnalysisResponse | None" = None
+    analyses: list["MediaAnalysisResponse"] = Field(default_factory=list)
 
     @classmethod
     def from_db(
@@ -59,13 +61,19 @@ class MediaAttachmentResponse(BaseModel):
             analysis=MediaAnalysisResponse.from_db(
                 get_attachment_analysis(session, attachment.id)
             ),
+            analyses=[
+                MediaAnalysisResponse.from_analysis(analysis)
+                for analysis in get_attachment_analyses(session, attachment.id)
+            ],
         )
 
 
 class MediaAnalysisResponse(BaseModel):
+    analysis_profile_id: str
     status: str
     model_name: str
     model_version: str
+    scoring_version: str
     illustration_score: float | None
     tags: dict[str, float]
     ratings: dict[str, float]
@@ -73,19 +81,25 @@ class MediaAnalysisResponse(BaseModel):
     analyzed_at: datetime | None
 
     @classmethod
-    def from_db(cls, analysis: MediaAnalysis | None) -> "MediaAnalysisResponse | None":
-        if analysis is None:
-            return None
+    def from_analysis(cls, analysis: MediaAnalysis) -> "MediaAnalysisResponse":
         return cls(
+            analysis_profile_id=analysis.analysis_profile_id,
             status=analysis.status.value,
             model_name=analysis.model_name,
             model_version=analysis.model_version,
+            scoring_version=analysis.scoring_version,
             illustration_score=analysis.illustration_score,
             tags=_decode_scores(analysis.tags_json),
             ratings=_decode_scores(analysis.ratings_json),
             error=analysis.error,
             analyzed_at=analysis.analyzed_at,
         )
+
+    @classmethod
+    def from_db(cls, analysis: MediaAnalysis | None) -> "MediaAnalysisResponse | None":
+        if analysis is None:
+            return None
+        return cls.from_analysis(analysis)
 
 
 class ItemSummary(BaseModel):

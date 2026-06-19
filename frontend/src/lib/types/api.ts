@@ -4,10 +4,23 @@ export type AnalysisStatus = 'completed' | 'failed' | 'skipped';
 export type ApprovalMode = 'auto' | 'manual';
 export type RuleTargetType = 'community' | 'author';
 
+export interface AnalysisProfile {
+  id: string;
+  name: string;
+  model_name: string;
+  model_version: string;
+  scoring_version: string;
+  tag_persistence_threshold: number;
+  auto_approve_threshold: number;
+  enabled: boolean;
+}
+
 export interface MediaAnalysis {
+  analysis_profile_id: string;
   status: AnalysisStatus;
   model_name: string;
   model_version: string;
+  scoring_version: string;
   illustration_score: number | null;
   tags: Record<string, number>;
   ratings: Record<string, number>;
@@ -27,6 +40,7 @@ export interface MediaAttachment {
   extension: string | null;
   download_strategy: string;
   analysis: MediaAnalysis | null;
+  analyses: MediaAnalysis[];
 }
 
 export interface ItemSummary {
@@ -82,8 +96,8 @@ export interface SettingsResponse {
   download_base_dir: string;
   illustration_tagger_enabled: boolean;
   illustration_auto_approve_enabled: boolean;
-  illustration_auto_approve_threshold: number;
-  illustration_tag_persistence_threshold: number;
+  active_analysis_profile_id: string;
+  analysis_profiles: AnalysisProfile[];
   sources: SourceSettingsResponse;
 }
 
@@ -94,8 +108,7 @@ export interface SettingsUpdate {
   download_base_dir?: string;
   illustration_tagger_enabled?: boolean;
   illustration_auto_approve_enabled?: boolean;
-  illustration_auto_approve_threshold?: number;
-  illustration_tag_persistence_threshold?: number;
+  active_analysis_profile_id?: string;
   sources?: SourceSettingsUpdate;
 }
 

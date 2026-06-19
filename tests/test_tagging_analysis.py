@@ -8,7 +8,13 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from upvote_monitor.api.items import analyze_item_endpoint
-from upvote_monitor.db.models import AppSettings, MediaAnalysis, MediaAttachment, ReviewItem
+from upvote_monitor.db.models import (
+    AnalysisProfile,
+    AppSettings,
+    MediaAnalysis,
+    MediaAttachment,
+    ReviewItem,
+)
 from upvote_monitor.enums import (
     AnalysisStatus,
     ApprovalMode,
@@ -20,8 +26,11 @@ from upvote_monitor.services.ingest import IngestResult
 from upvote_monitor.services.download import DownloadBatchResult
 from upvote_monitor.services.refresh import create_refresh_run, execute_refresh_run
 from upvote_monitor.services.tagging.analysis import process_pending_analysis
+from upvote_monitor.services.tagging.profiles import SCORING_VERSION
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult
+
+TEST_PROFILE_ID = "fake-wd-default"
 
 
 @pytest.fixture
@@ -104,7 +113,19 @@ def add_settings(
     auto_approve_enabled: bool = True,
     threshold: float = 0.9,
     tag_persistence_threshold: float = 0.15,
+    profile_id: str = TEST_PROFILE_ID,
 ) -> None:
+    session.add(
+        AnalysisProfile(
+            id=profile_id,
+            name="Fake WD",
+            model_name=FakeTagger.model_name,
+            model_version=FakeTagger.model_version,
+            scoring_version=SCORING_VERSION,
+            tag_persistence_threshold=tag_persistence_threshold,
+            auto_approve_threshold=threshold,
+        )
+    )
     session.add(
         AppSettings(
             id=1,
@@ -114,8 +135,7 @@ def add_settings(
             download_base_dir="/download",
             illustration_tagger_enabled=tagger_enabled,
             illustration_auto_approve_enabled=auto_approve_enabled,
-            illustration_auto_approve_threshold=threshold,
-            illustration_tag_persistence_threshold=tag_persistence_threshold,
+            active_analysis_profile_id=profile_id,
         )
     )
 
@@ -216,6 +236,77 @@ def test_pending_analysis_uses_configured_tag_persistence_threshold(
         }
 
 
+def test_item_detail_uses_active_profile_and_preserves_other_analyses(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        add_settings(session, auto_approve_enabled=False)
+        item = make_item("multi-profile")
+        attachment = make_attachment(item.id)
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        other_profile_id = "other-profile"
+        session.add(
+            AnalysisProfile(
+                id=other_profile_id,
+                name="Other Tagger",
+                model_name="other/model",
+                model_version="main",
+                scoring_version="illustration-v2",
+                tag_persistence_threshold=0.2,
+                auto_approve_threshold=0.8,
+            )
+        )
+        assert attachment.id is not None
+        session.add(
+            MediaAnalysis(
+                attachment_id=attachment.id,
+                analysis_profile_id=TEST_PROFILE_ID,
+                model_name=FakeTagger.model_name,
+                model_version=FakeTagger.model_version,
+                scoring_version=SCORING_VERSION,
+                status=AnalysisStatus.COMPLETED,
+                illustration_score=0.91,
+                tags_json='{"manga": 0.91}',
+                ratings_json="{}",
+            )
+        )
+        session.add(
+            MediaAnalysis(
+                attachment_id=attachment.id,
+                analysis_profile_id=other_profile_id,
+                model_name="other/model",
+                model_version="main",
+                scoring_version="illustration-v2",
+                status=AnalysisStatus.COMPLETED,
+                illustration_score=0.22,
+                tags_json='{"realistic": 0.8}',
+                ratings_json="{}",
+            )
+        )
+        session.commit()
+
+        detail = ItemDetail.from_db(item, session)
+        assert detail.illustration_score == 0.91
+        assert detail.media[0].analysis is not None
+        assert detail.media[0].analysis.analysis_profile_id == TEST_PROFILE_ID
+        assert len(detail.media[0].analyses) == 2
+
+        settings = session.get(AppSettings, 1)
+        assert settings is not None
+        settings.active_analysis_profile_id = other_profile_id
+        session.add(settings)
+        session.commit()
+
+        next_detail = ItemDetail.from_db(item, session)
+        assert next_detail.illustration_score == 0.22
+        assert next_detail.media[0].analysis is not None
+        assert next_detail.media[0].analysis.analysis_profile_id == other_profile_id
+
+
 def test_pending_analysis_skips_non_cacheable_preview(engine: Engine) -> None:
     with Session(engine) as session:
         add_settings(session)
@@ -257,7 +348,7 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
     taggers = [first_tagger, second_tagger]
     monkeypatch.setattr(
         "upvote_monitor.services.tagging.analysis.get_wd_tagger",
-        lambda: taggers.pop(0),
+        lambda *_args, **_kwargs: taggers.pop(0),
     )
 
     with Session(engine) as session:

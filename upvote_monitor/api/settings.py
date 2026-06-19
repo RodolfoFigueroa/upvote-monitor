@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from upvote_monitor.api.deps import get_db_session
-from upvote_monitor.db.models import AppSettings, SourceSettings
+from upvote_monitor.db.models import AnalysisProfile, AppSettings, SourceSettings
 from upvote_monitor.scheduler import reschedule_from_settings
 from upvote_monitor.schemas.settings import SettingsResponse, SettingsUpdate
 from upvote_monitor.services.secrets import (
@@ -21,6 +21,10 @@ from upvote_monitor.services.source_settings import (
     X_SOURCE,
     decode_options,
     encode_options,
+)
+from upvote_monitor.services.tagging.profiles import (
+    ensure_default_analysis_profiles,
+    list_analysis_profiles,
 )
 from upvote_monitor.sources.x import validate_x_credentials
 from upvote_monitor.upvoted import validate_reddit_credentials
@@ -342,6 +346,7 @@ def _settings_response(
     session: Session,
     settings: AppSettings,
 ) -> SettingsResponse:
+    ensure_default_analysis_profiles(session)
     reddit_settings = _get_source_settings(
         session,
         REDDIT_SOURCE,
@@ -354,7 +359,13 @@ def _settings_response(
         X_DEFAULT_OPTIONS,
         enabled=False,
     )
-    return SettingsResponse.from_db(settings, reddit_settings, x_settings, SecretStore())
+    return SettingsResponse.from_db(
+        settings,
+        reddit_settings,
+        x_settings,
+        SecretStore(),
+        list_analysis_profiles(session),
+    )
 
 
 @router.get("", response_model=SettingsResponse)
@@ -382,6 +393,14 @@ def update_settings(
 
     if "download_base_dir" in updates:
         Path(updates["download_base_dir"]).mkdir(parents=True, exist_ok=True)
+
+    if "active_analysis_profile_id" in updates:
+        profile = session.get(AnalysisProfile, updates["active_analysis_profile_id"])
+        if profile is None or not profile.enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="Active analysis profile does not exist or is disabled",
+            )
 
     for key, value in updates.items():
         setattr(settings, key, value)
