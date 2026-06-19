@@ -1,0 +1,13 @@
+services:
+  app:
+    image: upvote-monitor:latest
+    container_name: upvote-monitor-dev
+    build: ..
+    ports:
+      - 3134:3134
+    env_file:
+      - ../.env
+    volumes:
+      - ${DATA_DIR}:/data
+      - ${DOWNLOAD_DIR}:/download
+    restart: unless-stopped

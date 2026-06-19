@@ -1,0 +1,122 @@
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from sqlalchemy import Column, Text, UniqueConstraint
+from sqlmodel import Field, SQLModel
+
+from upvote_monitor.enums import (
+    ApprovalMode,
+    ApprovalStatus,
+    DownloadStrategy,
+    DownloadStatus,
+    ListType,
+    RuleTargetType,
+    RefreshRunStatus,
+)
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ReviewItem(SQLModel, table=True):
+    __tablename__ = "review_items"
+    __table_args__ = (
+        UniqueConstraint("source", "source_item_id", name="uq_review_item_source_item"),
+    )
+
+    id: str = Field(primary_key=True)
+    source: str = Field(index=True)
+    source_item_id: str = Field(index=True)
+    title: str
+    author_name: str | None = Field(default=None, index=True)
+    author_label: str | None = None
+    community_name: str | None = Field(default=None, index=True)
+    community_label: str | None = None
+    item_kind: str
+    source_url: str
+    created_at: datetime
+    approval_status: ApprovalStatus
+    download_status: DownloadStatus = Field(default=DownloadStatus.PENDING)
+    download_error: str | None = None
+    raw_data_json: str = Field(sa_column=Column(Text, nullable=False))
+    media_count: int
+    discovered_at: datetime = Field(default_factory=utc_now)
+    downloaded_at: datetime | None = None
+    download_dir: str | None = None
+
+
+class MediaAttachment(SQLModel, table=True):
+    __tablename__ = "media_attachments"
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id",
+            "sort_index",
+            name="uq_media_attachment_item_sort",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    item_id: str = Field(foreign_key="review_items.id", index=True)
+    sort_index: int
+    media_type: str
+    content_type: str | None = None
+    download_url: str
+    preview_url: str | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_ms: int | None = None
+    extension: str | None = None
+    download_strategy: DownloadStrategy = Field(default=DownloadStrategy.HTTP)
+
+
+class AppSettings(SQLModel, table=True):
+    __tablename__ = "app_settings"
+
+    id: int = Field(primary_key=True, default=1)
+    approval_mode: ApprovalMode = Field(default=ApprovalMode.MANUAL)
+    refresh_cron: str = Field(default="0 */6 * * *")
+    refresh_enabled: bool = Field(default=True)
+    download_base_dir: str = Field(default="/download")
+
+
+class SourceSettings(SQLModel, table=True):
+    __tablename__ = "source_settings"
+
+    source: str = Field(primary_key=True)
+    enabled: bool = Field(default=True)
+    options_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+
+
+class SourceRule(SQLModel, table=True):
+    __tablename__ = "source_rules"
+    __table_args__ = (
+        UniqueConstraint(
+            "source",
+            "rule_type",
+            "target_type",
+            "target_value",
+            name="uq_source_rule",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    source: str = Field(index=True)
+    rule_type: ListType = Field(index=True)
+    target_type: RuleTargetType = Field(index=True)
+    target_value: str = Field(index=True)
+    target_label: str
+
+
+class RefreshRun(SQLModel, table=True):
+    __tablename__ = "refresh_runs"
+
+    id: str = Field(primary_key=True, default_factory=lambda: str(uuid4()))
+    status: RefreshRunStatus = Field(default=RefreshRunStatus.QUEUED)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    new_items: int = Field(default=0)
+    skipped: int = Field(default=0)
+    downloads_triggered: int = Field(default=0)
+    downloads_failed: int = Field(default=0)
+    error: str | None = None
