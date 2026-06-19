@@ -19,6 +19,12 @@ class DownloadStrategy(str, Enum):
     YT_DLP = "yt_dlp"
 
 
+class AnalysisStatus(str, Enum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class ApprovalMode(str, Enum):
     AUTO = "auto"
     MANUAL = "manual"

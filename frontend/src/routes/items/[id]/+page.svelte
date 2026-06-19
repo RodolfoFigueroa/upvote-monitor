@@ -3,16 +3,14 @@
   import {
     Check,
     CircleAlert,
-    Download,
-    ExternalLink,
     RotateCcw,
+    Tags,
     X,
   } from '@lucide/svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import MediaPreview from '$lib/components/MediaPreview.svelte';
-  import StatusBadge from '$lib/components/StatusBadge.svelte';
+  import ItemDecisionPanel from '$lib/components/ItemDecisionPanel.svelte';
   import { api } from '$lib/api/client';
-  import { communityLabel, formatDate, sourceLabel } from '$lib/format';
+  import { communityLabel, formatDate } from '$lib/format';
   import { subscribeItemUpdated } from '$lib/sse/store.svelte';
   import type { DownloadStatus, ItemDetail, ItemFile } from '$lib/types/api';
   import { onMount } from 'svelte';
@@ -21,6 +19,7 @@
   let files = $state<ItemFile[]>([]);
   let loading = $state(true);
   let actionLoading = $state(false);
+  let taggingLoading = $state(false);
   let errorMessage = $state<string | null>(null);
 
   const itemId = $derived($page.params.id ?? '');
@@ -95,6 +94,18 @@
     }
   }
 
+  async function analyze() {
+    taggingLoading = true;
+    errorMessage = null;
+    try {
+      item = await api.items.analyze(itemId);
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : 'Tagging failed';
+    } finally {
+      taggingLoading = false;
+    }
+  }
+
   onMount(() => {
     void load();
     return subscribeItemUpdated((event) => {
@@ -159,69 +170,49 @@
   {/if}
 
   <section class="panel decision-panel">
-    <div class="decision-layout">
-      <div class="media-stage">
-        <MediaPreview {item} {files} />
-      </div>
-      <aside class="side-panel">
-        <h2>Status</h2>
-        <div class="actions-row">
-          <StatusBadge value={item.approval_status} />
-          <StatusBadge value={item.download_status} />
-        </div>
-
-        <div class="actions-row">
-          <button
-            class="button"
-            data-tone="primary"
-            onclick={approve}
-            disabled={actionLoading}
-          >
-            <Check size={16} />
-            Approve
+    <ItemDecisionPanel
+      {item}
+      detail={item}
+      {files}
+      heading="Status"
+      showDownloaded
+      showDownloadError
+    >
+      {#snippet actions()}
+        <button
+          class="button"
+          data-tone="primary"
+          onclick={approve}
+          disabled={actionLoading}
+        >
+          <Check size={16} />
+          Approve
+        </button>
+        <button
+          class="button"
+          data-tone="danger"
+          onclick={reject}
+          disabled={actionLoading}
+        >
+          <X size={16} />
+          Reject
+        </button>
+        {#if canRetry}
+          <button class="button" onclick={retryDownload} disabled={actionLoading}>
+            <RotateCcw size={16} />
+            Retry
           </button>
-          <button
-            class="button"
-            data-tone="danger"
-            onclick={reject}
-            disabled={actionLoading}
-          >
-            <X size={16} />
-            Reject
-          </button>
-          {#if canRetry}
-            <button class="button" onclick={retryDownload} disabled={actionLoading}>
-              <RotateCcw size={16} />
-              Retry
-            </button>
-          {/if}
-        </div>
-
-        <div class="actions-row">
-          <a
-            class="button"
-            data-tone="quiet"
-            href={item.source_url}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <ExternalLink size={16} />
-            {sourceLabel(item)}
-          </a>
-        </div>
-
-        <div class="notice" style="margin-top: 16px;">
-          <Download size={16} />
-          Downloaded {formatDate(item.downloaded_at)}
-        </div>
-
-        {#if item.download_error}
-          <div class="notice" data-tone="danger" style="margin-top: 10px;">
-            <CircleAlert size={16} />
-            {item.download_error}
-          </div>
         {/if}
-      </aside>
-    </div>
+        <button
+          class="button"
+          data-tone="quiet"
+          onclick={analyze}
+          disabled={taggingLoading}
+        >
+          <Tags size={16} />
+          {taggingLoading ? 'Tagging' : 'Tag'}
+        </button>
+      {/snippet}
+    </ItemDecisionPanel>
   </section>
 {/if}

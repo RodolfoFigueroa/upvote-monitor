@@ -146,6 +146,10 @@ class SettingsResponse(BaseModel):
     refresh_cron: str
     refresh_enabled: bool
     download_base_dir: str
+    illustration_tagger_enabled: bool
+    illustration_auto_approve_enabled: bool
+    illustration_auto_approve_threshold: float
+    illustration_tag_persistence_threshold: float
     sources: SourceSettingsResponse
 
     @classmethod
@@ -161,6 +165,16 @@ class SettingsResponse(BaseModel):
             refresh_cron=settings.refresh_cron,
             refresh_enabled=settings.refresh_enabled,
             download_base_dir=settings.download_base_dir,
+            illustration_tagger_enabled=settings.illustration_tagger_enabled,
+            illustration_auto_approve_enabled=(
+                settings.illustration_auto_approve_enabled
+            ),
+            illustration_auto_approve_threshold=(
+                settings.illustration_auto_approve_threshold
+            ),
+            illustration_tag_persistence_threshold=(
+                settings.illustration_tag_persistence_threshold
+            ),
             sources=SourceSettingsResponse(
                 reddit=RedditSourceSettingsResponse.from_db(
                     reddit_settings,
@@ -235,6 +249,18 @@ class SettingsUpdate(BaseModel):
     refresh_cron: str | None = None
     refresh_enabled: bool | None = None
     download_base_dir: str | None = None
+    illustration_tagger_enabled: bool | None = None
+    illustration_auto_approve_enabled: bool | None = None
+    illustration_auto_approve_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
+    illustration_tag_persistence_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
     sources: SourceSettingsUpdate | None = None
 
     @field_validator("refresh_cron")

@@ -88,6 +88,8 @@ export const api = {
     get: (id: string) => request<ItemDetail>(`/api/items/${id}`),
     approve: (id: string) =>
       request<ItemDetail>(`/api/items/${id}/approve`, { method: 'POST' }),
+    analyze: (id: string) =>
+      request<ItemDetail>(`/api/items/${id}/analyze`, { method: 'POST' }),
     reject: (id: string) =>
       request<ItemDetail>(`/api/items/${id}/reject`, { method: 'POST' }),
     retryDownload: (id: string) =>

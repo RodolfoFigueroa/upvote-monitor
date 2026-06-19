@@ -12,6 +12,7 @@ from upvote_monitor.services.refresh_status import (
     broadcast_refresh_status,
     broadcast_review_queue_changed,
 )
+from upvote_monitor.services.tagging import process_pending_analysis
 
 
 class RefreshAlreadyRunningError(Exception):
@@ -70,6 +71,7 @@ def execute_refresh_run(session: Session, run_id: str) -> None:
     completed = False
     try:
         ingest_result = ingest_items(session)
+        process_pending_analysis(session)
         download_result = process_pending_downloads(session)
 
         run.new_items = ingest_result.new_items

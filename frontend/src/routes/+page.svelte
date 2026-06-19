@@ -4,15 +4,16 @@
     Check,
     ChevronDown,
     CircleAlert,
-    ExternalLink,
     Inbox,
+    Tags,
     X,
   } from '@lucide/svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import ItemDecisionPanel from '$lib/components/ItemDecisionPanel.svelte';
   import MediaPreview from '$lib/components/MediaPreview.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { api } from '$lib/api/client';
-  import { communityLabel, formatRelative, sourceLabel, statusLabel } from '$lib/format';
+  import { communityLabel, formatRelative, statusLabel } from '$lib/format';
   import { subscribeReviewQueueChanged } from '$lib/sse/store.svelte';
   import type {
     DownloadStatus,
@@ -37,6 +38,7 @@
   let details = $state<Record<string, ItemDetail>>({});
   let detailLoading = $state<Record<string, boolean>>({});
   let pendingActions = $state<Record<string, string>>({});
+  let taggingActions = $state<Record<string, boolean>>({});
   let selectedId = $state<string | null>(null);
   let loading = $state(true);
   let errorMessage = $state<string | null>(null);
@@ -57,11 +59,16 @@
   const selectedSummary = $derived(
     selectedId ? items.find((item) => item.id === selectedId) ?? null : null
   );
+  const selectedDetail = $derived(selectedId ? details[selectedId] ?? null : null);
   const selectedItem = $derived(
-    selectedId ? details[selectedId] ?? selectedSummary : null
+    selectedId ? selectedDetail ?? selectedSummary : null
   );
   const selectedIsLoading = $derived(
     selectedId ? detailLoading[selectedId] === true : false
+  );
+  const inFlightActionCount = $derived(
+    Object.keys(pendingActions).length +
+      Object.values(taggingActions).filter(Boolean).length
   );
   const draftSelectedSourceLabels = $derived(draftSelectedSources.map(sourceDisplayLabel));
   const appliedSelectedSourceLabels = $derived(appliedSelectedSources.map(sourceDisplayLabel));
@@ -242,6 +249,35 @@
     void hydrateDetail(itemId);
   }
 
+  function itemBusy(itemId: string): boolean {
+    return pendingActions[itemId] !== undefined || taggingActions[itemId] === true;
+  }
+
+  function updateSummaryFromDetail(detail: ItemDetail) {
+    const {
+      download_error: _downloadError,
+      media: _media,
+      source_urls: _sourceUrls,
+      ...summary
+    } = detail;
+    items = items.map((item) => (item.id === detail.id ? { ...item, ...summary } : item));
+  }
+
+  async function analyzeSelectedItem(itemId: string) {
+    actionError = null;
+    taggingActions = { ...taggingActions, [itemId]: true };
+    try {
+      const detail = await api.items.analyze(itemId);
+      details = { ...details, [itemId]: detail };
+      updateSummaryFromDetail(detail);
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : 'Tagging failed';
+    } finally {
+      const { [itemId]: _, ...rest } = taggingActions;
+      taggingActions = rest;
+    }
+  }
+
   function removeOptimistically(itemId: string) {
     const index = items.findIndex((item) => item.id === itemId);
     items = items.filter((item) => item.id !== itemId);
@@ -341,7 +377,7 @@
       <span>awaiting decision</span>
     </div>
     <div class="metric">
-      <strong>{Object.keys(pendingActions).length}</strong>
+      <strong>{inFlightActionCount}</strong>
       <span>in flight</span>
     </div>
   </div>
@@ -509,79 +545,65 @@
 
     <section class="panel decision-panel">
       {#if selectedItem}
-        <div class="decision-layout">
-          <div class="media-stage">
-            <MediaPreview item={selectedItem} />
-          </div>
-          <aside class="side-panel">
-            <h2>{selectedItem.title}</h2>
-            <p>
-              {communityLabel(selectedItem)} · {selectedItem.item_kind} · discovered
-              {formatRelative(selectedItem.discovered_at)}
-            </p>
-            <div class="actions-row">
-              <StatusBadge value={selectedItem.approval_status} />
-              <StatusBadge value={selectedItem.download_status} />
-            </div>
-            {#if selectedIsLoading}
-              <div class="notice" style="margin-top: 14px;">Loading full item data</div>
+        <ItemDecisionPanel
+          item={selectedItem}
+          detail={selectedDetail}
+          heading={selectedItem.title}
+          meta={`${communityLabel(selectedItem)} · ${selectedItem.item_kind} · discovered ${formatRelative(selectedItem.discovered_at)}`}
+          loadingMessage={selectedIsLoading ? 'Loading full item data' : null}
+        >
+          {#snippet actions()}
+            <button
+              class="button"
+              data-tone="primary"
+              disabled={itemBusy(selectedItem.id)}
+              onclick={() => actOnItem(selectedItem.id, 'approve')}
+            >
+              <Check size={16} />
+              Approve
+            </button>
+            <button
+              class="button"
+              data-tone="danger"
+              disabled={itemBusy(selectedItem.id)}
+              onclick={() => actOnItem(selectedItem.id, 'reject')}
+            >
+              <X size={16} />
+              Reject
+            </button>
+            <button
+              class="button"
+              data-tone="quiet"
+              disabled={itemBusy(selectedItem.id)}
+              onclick={() => analyzeSelectedItem(selectedItem.id)}
+            >
+              <Tags size={16} />
+              {taggingActions[selectedItem.id] ? 'Tagging' : 'Tag'}
+            </button>
+            {#if selectedItem.community_name}
+              <button
+                class="button"
+                data-tone="warning"
+                disabled={itemBusy(selectedItem.id)}
+                onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_community')}
+              >
+                <Ban size={16} />
+                Blacklist Community
+              </button>
             {/if}
-            <div class="actions-row">
+            {#if selectedItem.author_name}
               <button
                 class="button"
-                data-tone="primary"
-                disabled={pendingActions[selectedItem.id] !== undefined}
-                onclick={() => actOnItem(selectedItem.id, 'approve')}
+                data-tone="warning"
+                disabled={itemBusy(selectedItem.id)}
+                onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_author')}
               >
-                <Check size={16} />
-                Approve
+                <Ban size={16} />
+                Blacklist Author
               </button>
-              <button
-                class="button"
-                data-tone="danger"
-                disabled={pendingActions[selectedItem.id] !== undefined}
-                onclick={() => actOnItem(selectedItem.id, 'reject')}
-              >
-                <X size={16} />
-                Reject
-              </button>
-              {#if selectedItem.community_name}
-                <button
-                  class="button"
-                  data-tone="warning"
-                  disabled={pendingActions[selectedItem.id] !== undefined}
-                  onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_community')}
-                >
-                  <Ban size={16} />
-                  Blacklist Community
-                </button>
-              {/if}
-              {#if selectedItem.author_name}
-                <button
-                  class="button"
-                  data-tone="warning"
-                  disabled={pendingActions[selectedItem.id] !== undefined}
-                  onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_author')}
-                >
-                  <Ban size={16} />
-                  Blacklist Author
-                </button>
-              {/if}
-            </div>
-            <div class="actions-row">
-              <a
-                class="button"
-                data-tone="quiet"
-                href={selectedItem.source_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <ExternalLink size={16} />
-                {sourceLabel(selectedItem)}
-              </a>
-            </div>
-          </aside>
-        </div>
+            {/if}
+          {/snippet}
+        </ItemDecisionPanel>
       {/if}
     </section>
   </div>

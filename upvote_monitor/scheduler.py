@@ -38,10 +38,22 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
-def reschedule_from_settings() -> None:
+def reschedule_from_settings(settings: AppSettings | None = None) -> None:
     scheduler = get_scheduler()
     if scheduler.get_job(JOB_ID):
         scheduler.remove_job(JOB_ID)
+
+    if settings is not None:
+        if not settings.refresh_enabled:
+            return
+
+        scheduler.add_job(
+            _run_scheduled_refresh,
+            CronTrigger.from_crontab(settings.refresh_cron),
+            id=JOB_ID,
+            replace_existing=True,
+        )
+        return
 
     with Session(engine) as session:
         settings = session.get(AppSettings, 1)

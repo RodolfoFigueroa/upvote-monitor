@@ -5,6 +5,7 @@ from sqlalchemy import Column, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from upvote_monitor.enums import (
+    AnalysisStatus,
     ApprovalMode,
     ApprovalStatus,
     DownloadStrategy,
@@ -70,6 +71,29 @@ class MediaAttachment(SQLModel, table=True):
     download_strategy: DownloadStrategy = Field(default=DownloadStrategy.HTTP)
 
 
+class MediaAnalysis(SQLModel, table=True):
+    __tablename__ = "media_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "attachment_id",
+            "model_name",
+            "model_version",
+            name="uq_media_analysis_attachment_model",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    attachment_id: int = Field(foreign_key="media_attachments.id", index=True)
+    model_name: str = Field(index=True)
+    model_version: str = Field(default="main", index=True)
+    status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED, index=True)
+    illustration_score: float | None = Field(default=None, index=True)
+    tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    ratings_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    error: str | None = None
+    analyzed_at: datetime | None = None
+
+
 class AppSettings(SQLModel, table=True):
     __tablename__ = "app_settings"
 
@@ -78,6 +102,10 @@ class AppSettings(SQLModel, table=True):
     refresh_cron: str = Field(default="0 */6 * * *")
     refresh_enabled: bool = Field(default=True)
     download_base_dir: str = Field(default="/download")
+    illustration_tagger_enabled: bool = Field(default=False)
+    illustration_auto_approve_enabled: bool = Field(default=False)
+    illustration_auto_approve_threshold: float = Field(default=0.90)
+    illustration_tag_persistence_threshold: float = Field(default=0.15)
 
 
 class SourceSettings(SQLModel, table=True):

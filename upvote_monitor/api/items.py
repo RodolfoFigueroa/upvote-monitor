@@ -27,6 +27,10 @@ from upvote_monitor.services.preview_cache import (
     get_or_fetch_cached_preview,
     preview_media_type,
 )
+from upvote_monitor.services.tagging.analysis import (
+    TaggerUnavailableError,
+    analyze_item,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -130,6 +134,21 @@ def get_item(
     session: Session = Depends(get_db_session),
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
+    return ItemDetail.from_db(item, session)
+
+
+@router.post("/{item_id}/analyze", response_model=ItemDetail)
+def analyze_item_endpoint(
+    item_id: str,
+    session: Session = Depends(get_db_session),
+) -> ItemDetail:
+    item = _get_item_or_404(session, item_id)
+    try:
+        analyze_item(session, item)
+    except TaggerUnavailableError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    session.refresh(item)
     return ItemDetail.from_db(item, session)
 
 

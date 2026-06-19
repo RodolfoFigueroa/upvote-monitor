@@ -1,9 +1,10 @@
 from datetime import datetime
+import json
 
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from upvote_monitor.db.models import MediaAttachment, ReviewItem
+from upvote_monitor.db.models import MediaAnalysis, MediaAttachment, ReviewItem
 from upvote_monitor.enums import ApprovalStatus
 from upvote_monitor.services.download import (
     get_media_attachments,
@@ -11,6 +12,10 @@ from upvote_monitor.services.download import (
     get_source_urls,
 )
 from upvote_monitor.services.preview_cache import localize_preview_urls
+from upvote_monitor.services.tagging.analysis import (
+    get_attachment_analysis,
+    get_item_analysis_summary,
+)
 
 
 def _approval_status_api(status: ApprovalStatus) -> str:
@@ -32,9 +37,14 @@ class MediaAttachmentResponse(BaseModel):
     duration_ms: int | None
     extension: str | None
     download_strategy: str
+    analysis: "MediaAnalysisResponse | None" = None
 
     @classmethod
-    def from_db(cls, attachment: MediaAttachment) -> "MediaAttachmentResponse":
+    def from_db(
+        cls,
+        attachment: MediaAttachment,
+        session: Session,
+    ) -> "MediaAttachmentResponse":
         return cls(
             sort_index=attachment.sort_index,
             media_type=attachment.media_type,
@@ -46,6 +56,35 @@ class MediaAttachmentResponse(BaseModel):
             duration_ms=attachment.duration_ms,
             extension=attachment.extension,
             download_strategy=attachment.download_strategy.value,
+            analysis=MediaAnalysisResponse.from_db(
+                get_attachment_analysis(session, attachment.id)
+            ),
+        )
+
+
+class MediaAnalysisResponse(BaseModel):
+    status: str
+    model_name: str
+    model_version: str
+    illustration_score: float | None
+    tags: dict[str, float]
+    ratings: dict[str, float]
+    error: str | None
+    analyzed_at: datetime | None
+
+    @classmethod
+    def from_db(cls, analysis: MediaAnalysis | None) -> "MediaAnalysisResponse | None":
+        if analysis is None:
+            return None
+        return cls(
+            status=analysis.status.value,
+            model_name=analysis.model_name,
+            model_version=analysis.model_version,
+            illustration_score=analysis.illustration_score,
+            tags=_decode_scores(analysis.tags_json),
+            ratings=_decode_scores(analysis.ratings_json),
+            error=analysis.error,
+            analyzed_at=analysis.analyzed_at,
         )
 
 
@@ -67,10 +106,13 @@ class ItemSummary(BaseModel):
     discovered_at: datetime
     downloaded_at: datetime | None
     preview_urls: list[str]
+    analysis_status: str | None
+    illustration_score: float | None
 
     @classmethod
     def from_db(cls, item: ReviewItem, session: Session) -> "ItemSummary":
         preview_urls = get_preview_urls(session, item.id)
+        analysis = get_item_analysis_summary(session, item.id)
         return cls(
             id=item.id,
             source=item.source,
@@ -93,6 +135,8 @@ class ItemSummary(BaseModel):
                 item.approval_status,
                 preview_urls,
             ),
+            analysis_status=analysis.status,
+            illustration_score=analysis.illustration_score,
         )
 
 
@@ -109,7 +153,7 @@ class ItemDetail(ItemSummary):
             download_error=item.download_error,
             source_urls=get_source_urls(session, item.id),
             media=[
-                MediaAttachmentResponse.from_db(attachment)
+                MediaAttachmentResponse.from_db(attachment, session)
                 for attachment in attachments
             ],
         )
@@ -131,3 +175,18 @@ class ItemFile(BaseModel):
 class ItemFilesResponse(BaseModel):
     item_id: str
     files: list[ItemFile]
+
+
+def _decode_scores(value: str) -> dict[str, float]:
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    result: dict[str, float] = {}
+    for key, score in raw.items():
+        if isinstance(key, str) and isinstance(score, int | float):
+            result[key] = float(score)
+    return result

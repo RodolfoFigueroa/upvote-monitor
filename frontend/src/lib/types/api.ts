@@ -1,7 +1,19 @@
 export type ApprovalStatus = 'rejected' | 'approved' | 'under_review';
 export type DownloadStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+export type AnalysisStatus = 'completed' | 'failed' | 'skipped';
 export type ApprovalMode = 'auto' | 'manual';
 export type RuleTargetType = 'community' | 'author';
+
+export interface MediaAnalysis {
+  status: AnalysisStatus;
+  model_name: string;
+  model_version: string;
+  illustration_score: number | null;
+  tags: Record<string, number>;
+  ratings: Record<string, number>;
+  error: string | null;
+  analyzed_at: string | null;
+}
 
 export interface MediaAttachment {
   sort_index: number;
@@ -14,6 +26,7 @@ export interface MediaAttachment {
   duration_ms: number | null;
   extension: string | null;
   download_strategy: string;
+  analysis: MediaAnalysis | null;
 }
 
 export interface ItemSummary {
@@ -34,6 +47,8 @@ export interface ItemSummary {
   discovered_at: string;
   downloaded_at: string | null;
   preview_urls: string[];
+  analysis_status: AnalysisStatus | null;
+  illustration_score: number | null;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -65,6 +80,10 @@ export interface SettingsResponse {
   refresh_cron: string;
   refresh_enabled: boolean;
   download_base_dir: string;
+  illustration_tagger_enabled: boolean;
+  illustration_auto_approve_enabled: boolean;
+  illustration_auto_approve_threshold: number;
+  illustration_tag_persistence_threshold: number;
   sources: SourceSettingsResponse;
 }
 
@@ -73,6 +92,10 @@ export interface SettingsUpdate {
   refresh_cron?: string;
   refresh_enabled?: boolean;
   download_base_dir?: string;
+  illustration_tagger_enabled?: boolean;
+  illustration_auto_approve_enabled?: boolean;
+  illustration_auto_approve_threshold?: number;
+  illustration_tag_persistence_threshold?: number;
   sources?: SourceSettingsUpdate;
 }
 

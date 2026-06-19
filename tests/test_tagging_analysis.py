@@ -1,0 +1,317 @@
+from collections.abc import Iterator
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from upvote_monitor.api.items import analyze_item_endpoint
+from upvote_monitor.db.models import AppSettings, MediaAnalysis, MediaAttachment, ReviewItem
+from upvote_monitor.enums import (
+    AnalysisStatus,
+    ApprovalMode,
+    ApprovalStatus,
+    DownloadStatus,
+)
+from upvote_monitor.schemas.items import ItemDetail
+from upvote_monitor.services.ingest import IngestResult
+from upvote_monitor.services.download import DownloadBatchResult
+from upvote_monitor.services.refresh import create_refresh_run, execute_refresh_run
+from upvote_monitor.services.tagging.analysis import process_pending_analysis
+from upvote_monitor.services.tagging.scoring import score_illustration
+from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    db_engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(db_engine)
+    yield db_engine
+    db_engine.dispose()
+
+
+class FakeTagger:
+    model_name = "fake/wd"
+    model_version = "test"
+
+    def __init__(self, result: WDTaggerResult | None = None) -> None:
+        self.result = result or WDTaggerResult(
+            ratings={"safe": 0.96},
+            general_tags={
+                "manga": 0.94,
+                "lineart": 0.88,
+                "1girl": 0.92,
+                "solo": 0.86,
+            },
+            character_tags={},
+        )
+        self.paths: list[Path] = []
+
+    def tag_image(self, path: Path) -> WDTaggerResult:
+        self.paths.append(path)
+        return self.result
+
+
+def make_item(
+    item_id: str,
+    *,
+    approval_status: ApprovalStatus = ApprovalStatus.UNDER_REVIEW,
+) -> ReviewItem:
+    return ReviewItem(
+        id=item_id,
+        source="reddit",
+        source_item_id=item_id,
+        title=f"Item {item_id}",
+        author_name="author",
+        author_label="u/author",
+        community_name="art",
+        community_label="r/art",
+        item_kind="image",
+        source_url=f"https://reddit.com/r/art/comments/{item_id}/item/",
+        created_at=datetime.now(timezone.utc),
+        approval_status=approval_status,
+        download_status=DownloadStatus.PENDING,
+        raw_data_json="{}",
+        media_count=1,
+    )
+
+
+def make_attachment(
+    item_id: str,
+    *,
+    preview_url: str = "https://example.com/preview.jpg",
+) -> MediaAttachment:
+    return MediaAttachment(
+        item_id=item_id,
+        sort_index=0,
+        media_type="image",
+        download_url="https://example.com/source.jpg",
+        preview_url=preview_url,
+        extension=".jpg",
+    )
+
+
+def add_settings(
+    session: Session,
+    *,
+    tagger_enabled: bool = True,
+    auto_approve_enabled: bool = True,
+    threshold: float = 0.9,
+    tag_persistence_threshold: float = 0.15,
+) -> None:
+    session.add(
+        AppSettings(
+            id=1,
+            approval_mode=ApprovalMode.MANUAL,
+            refresh_cron="0 */6 * * *",
+            refresh_enabled=True,
+            download_base_dir="/download",
+            illustration_tagger_enabled=tagger_enabled,
+            illustration_auto_approve_enabled=auto_approve_enabled,
+            illustration_auto_approve_threshold=threshold,
+            illustration_tag_persistence_threshold=tag_persistence_threshold,
+        )
+    )
+
+
+def test_scoring_prefers_danbooru_like_illustration_tags() -> None:
+    illustration = score_illustration(
+        {
+            "manga": 0.95,
+            "lineart": 0.90,
+            "1girl": 0.93,
+            "solo": 0.87,
+        },
+        {},
+        {"safe": 0.97},
+    )
+    photo = score_illustration(
+        {
+            "realistic": 0.91,
+            "photo_background": 0.82,
+            "food": 0.74,
+        },
+        {},
+        {"general": 0.60},
+    )
+
+    assert illustration >= 0.9
+    assert photo < 0.5
+
+
+def test_pending_analysis_persists_tags_and_auto_approves(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+
+    with Session(engine) as session:
+        add_settings(session)
+        item = make_item("auto-illustration")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        result = process_pending_analysis(session, FakeTagger())
+
+        item = session.get(ReviewItem, "auto-illustration")
+        analyses = session.exec(select(MediaAnalysis)).all()
+        assert result.analyzed == 1
+        assert result.approved == 1
+        assert item is not None
+        assert item.approval_status == ApprovalStatus.APPROVED
+        assert len(analyses) == 1
+        assert analyses[0].status == AnalysisStatus.COMPLETED
+        assert analyses[0].illustration_score is not None
+        assert "manga" in analyses[0].tags_json
+
+        detail = ItemDetail.from_db(item, session)
+        assert detail.illustration_score == analyses[0].illustration_score
+        assert detail.media[0].analysis is not None
+        assert detail.media[0].analysis.tags["manga"] == 0.94
+
+
+def test_pending_analysis_uses_configured_tag_persistence_threshold(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+
+    with Session(engine) as session:
+        add_settings(
+            session,
+            auto_approve_enabled=False,
+            tag_persistence_threshold=0.9,
+        )
+        item = make_item("tag-threshold")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        process_pending_analysis(session, FakeTagger())
+
+        detail = ItemDetail.from_db(item, session)
+        assert detail.media[0].analysis is not None
+        assert detail.media[0].analysis.tags == {
+            "manga": 0.94,
+            "1girl": 0.92,
+        }
+
+
+def test_pending_analysis_skips_non_cacheable_preview(engine: Engine) -> None:
+    with Session(engine) as session:
+        add_settings(session)
+        item = make_item("video-preview")
+        session.add(item)
+        session.add(make_attachment(item.id, preview_url="https://example.com/clip.mp4"))
+        session.commit()
+
+        result = process_pending_analysis(session, FakeTagger())
+
+        analyses = session.exec(select(MediaAnalysis)).all()
+        assert result.skipped == 1
+        assert analyses[0].status == AnalysisStatus.SKIPPED
+        stored_item = session.get(ReviewItem, item.id)
+        assert stored_item is not None
+        assert stored_item.approval_status == ApprovalStatus.UNDER_REVIEW
+
+
+def test_manual_analyze_endpoint_force_retags_without_auto_approval(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+
+    first_tagger = FakeTagger(
+        WDTaggerResult(
+            ratings={"safe": 0.7},
+            general_tags={"realistic": 0.9, "photo_background": 0.8},
+            character_tags={},
+        )
+    )
+    second_tagger = FakeTagger()
+    taggers = [first_tagger, second_tagger]
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_wd_tagger",
+        lambda: taggers.pop(0),
+    )
+
+    with Session(engine) as session:
+        add_settings(session, tagger_enabled=False, auto_approve_enabled=False)
+        item = make_item("manual-tag")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        first_detail = analyze_item_endpoint("manual-tag", session)
+        second_detail = analyze_item_endpoint("manual-tag", session)
+
+        analyses = session.exec(select(MediaAnalysis)).all()
+        item = session.get(ReviewItem, "manual-tag")
+        assert item is not None
+        assert item.approval_status == ApprovalStatus.UNDER_REVIEW
+        assert len(analyses) == 1
+        assert first_detail.media[0].analysis is not None
+        assert first_detail.media[0].analysis.tags["realistic"] == 0.9
+        assert second_detail.media[0].analysis is not None
+        assert second_detail.media[0].analysis.tags["manga"] == 0.94
+        assert "realistic" not in second_detail.media[0].analysis.tags
+
+
+def test_refresh_runs_analysis_between_ingest_and_download(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_ingest(_session: Session) -> IngestResult:
+        calls.append("ingest")
+        return IngestResult(new_items=1, skipped=0)
+
+    def fake_analysis(_session: Session) -> None:
+        calls.append("analysis")
+
+    def fake_downloads(_session: Session) -> DownloadBatchResult:
+        calls.append("download")
+        return DownloadBatchResult(triggered=0, failed=0)
+
+    monkeypatch.setattr("upvote_monitor.services.refresh.ingest_items", fake_ingest)
+    monkeypatch.setattr(
+        "upvote_monitor.services.refresh.process_pending_analysis",
+        fake_analysis,
+    )
+    monkeypatch.setattr(
+        "upvote_monitor.services.refresh.process_pending_downloads",
+        fake_downloads,
+    )
+
+    with Session(engine) as session:
+        add_settings(session, tagger_enabled=False, auto_approve_enabled=False)
+        run = create_refresh_run(session)
+        execute_refresh_run(session, run.id)
+
+    assert calls == ["ingest", "analysis", "download"]

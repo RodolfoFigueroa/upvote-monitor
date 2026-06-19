@@ -11,3 +11,10 @@ services:
       - ${DATA_DIR}:/data
       - ${DOWNLOAD_DIR}:/download
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]

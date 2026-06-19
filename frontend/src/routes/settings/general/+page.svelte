@@ -12,6 +12,10 @@
     refresh_cron: string;
     refresh_enabled: boolean;
     download_base_dir: string;
+    illustration_tagger_enabled: boolean;
+    illustration_auto_approve_enabled: boolean;
+    illustration_auto_approve_threshold: number;
+    illustration_tag_persistence_threshold: number;
   };
 
   const defaultDraft: GeneralDraft = {
@@ -19,6 +23,10 @@
     refresh_cron: '0 */6 * * *',
     refresh_enabled: true,
     download_base_dir: '/data/downloads',
+    illustration_tagger_enabled: false,
+    illustration_auto_approve_enabled: false,
+    illustration_auto_approve_threshold: 0.9,
+    illustration_tag_persistence_threshold: 0.15,
   };
 
   let settings = $state<SettingsResponse | null>(null);
@@ -37,6 +45,10 @@
       refresh_cron: value.refresh_cron,
       refresh_enabled: value.refresh_enabled,
       download_base_dir: value.download_base_dir,
+      illustration_tagger_enabled: value.illustration_tagger_enabled,
+      illustration_auto_approve_enabled: value.illustration_auto_approve_enabled,
+      illustration_auto_approve_threshold: value.illustration_auto_approve_threshold,
+      illustration_tag_persistence_threshold: value.illustration_tag_persistence_threshold,
     };
   }
 
@@ -45,7 +57,11 @@
       a.approval_mode === b.approval_mode &&
       a.refresh_cron === b.refresh_cron &&
       a.refresh_enabled === b.refresh_enabled &&
-      a.download_base_dir === b.download_base_dir
+      a.download_base_dir === b.download_base_dir &&
+      a.illustration_tagger_enabled === b.illustration_tagger_enabled &&
+      a.illustration_auto_approve_enabled === b.illustration_auto_approve_enabled &&
+      a.illustration_auto_approve_threshold === b.illustration_auto_approve_threshold &&
+      a.illustration_tag_persistence_threshold === b.illustration_tag_persistence_threshold
     );
   }
 
@@ -80,9 +96,13 @@
           refresh_cron: draft.refresh_cron,
           refresh_enabled: draft.refresh_enabled,
           download_base_dir: draft.download_base_dir,
+          illustration_tagger_enabled: draft.illustration_tagger_enabled,
+          illustration_auto_approve_enabled: draft.illustration_auto_approve_enabled,
+          illustration_auto_approve_threshold: draft.illustration_auto_approve_threshold,
+          illustration_tag_persistence_threshold: draft.illustration_tag_persistence_threshold,
         })
       );
-      message = 'General settings saved';
+      message = 'Settings saved';
     } catch (e) {
       errorMessage = e instanceof Error ? e.message : 'Failed to save settings';
     } finally {
@@ -139,17 +159,63 @@
           Refresh enabled
         </label>
       </div>
-      <div class="actions-row settings-actions">
-        <button
-          class="button"
-          data-tone="primary"
-          onclick={saveSettings}
-          disabled={saving || !dirty}
-        >
-          <SaveCheck size={16} />
-          {saving ? 'Saving' : 'Save'}
-        </button>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Illustration Tagger</h2>
+        <span>{dirty ? 'unsaved changes' : 'saved'}</span>
+      </div>
+      <div class="form-grid">
+        <label class="toggle-line">
+          <input type="checkbox" bind:checked={draft.illustration_tagger_enabled} />
+          Tag illustrations
+        </label>
+        <label class="toggle-line">
+          <input
+            type="checkbox"
+            bind:checked={draft.illustration_auto_approve_enabled}
+            disabled={!draft.illustration_tagger_enabled}
+          />
+          Auto-approve matching images
+        </label>
+        <div class="field">
+          <span>Auto-approve threshold</span>
+          <input
+            class="input"
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            bind:value={draft.illustration_auto_approve_threshold}
+            disabled={!draft.illustration_tagger_enabled}
+          />
+        </div>
+        <div class="field">
+          <span>Tag persistence threshold</span>
+          <input
+            class="input"
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            bind:value={draft.illustration_tag_persistence_threshold}
+            disabled={!draft.illustration_tagger_enabled}
+          />
+        </div>
       </div>
     </section>
+
+    <div class="actions-row settings-actions">
+      <button
+        class="button"
+        data-tone="primary"
+        onclick={saveSettings}
+        disabled={saving || !dirty}
+      >
+        <SaveCheck size={16} />
+        {saving ? 'Saving' : 'Save'}
+      </button>
+    </div>
   </div>
 {/if}
