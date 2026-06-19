@@ -69,21 +69,43 @@
     return 'not analyzed';
   }
 
-  function allAnalysisTags(value: ItemDetail | null): [string, number][] {
-    return (
-      value?.media
-        .flatMap((media) => Object.entries(media.analysis?.tags ?? {}))
-        .sort((a, b) => b[1] - a[1]) ?? []
+  function sortedScores(scores: Record<string, number> | undefined): [string, number][] {
+    return Object.entries(scores ?? {}).sort((a, b) => b[1] - a[1]);
+  }
+
+  function activeAnalyses(value: ItemDetail | null): MediaAnalysis[] {
+    return value?.media.flatMap((media) => media.analysis ?? []) ?? [];
+  }
+
+  function ratingTags(value: ItemDetail | null): [string, number][] {
+    return activeAnalyses(value).flatMap((analysis) => sortedScores(analysis.ratings));
+  }
+
+  function generalTags(value: ItemDetail | null): [string, number][] {
+    return activeAnalyses(value).flatMap((analysis) =>
+      sortedScores(analysis.general_tags)
     );
   }
 
-  function visibleAnalysisTags(value: ItemDetail | null): [string, number][] {
-    const tags = allAnalysisTags(value);
+  function characterTags(value: ItemDetail | null): [string, number][] {
+    return activeAnalyses(value).flatMap((analysis) =>
+      sortedScores(analysis.character_tags)
+    );
+  }
+
+  function visibleTags(tags: [string, number][]): [string, number][] {
     return showAllTags ? tags : tags.slice(0, compactTagLimit);
   }
 
   function hasHiddenAnalysisTags(value: ItemDetail | null): boolean {
-    return allAnalysisTags(value).length > compactTagLimit;
+    return (
+      generalTags(value).length > compactTagLimit ||
+      characterTags(value).length > compactTagLimit
+    );
+  }
+
+  function visibleTagCount(value: ItemDetail | null): number {
+    return ratingTags(value).length + generalTags(value).length + characterTags(value).length;
   }
 
   function analysisEntries(value: ItemDetail | null) {
@@ -106,10 +128,12 @@
     return `${shortModelName(analysis.model_name)} · ${analysis.model_version}`;
   }
 
-  function topTags(analysis: MediaAnalysis): [string, number][] {
-    return Object.entries(analysis.tags)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4);
+  function topGeneralTags(analysis: MediaAnalysis): [string, number][] {
+    return sortedScores(analysis.general_tags).slice(0, 4);
+  }
+
+  function topCharacterTags(analysis: MediaAnalysis): [string, number][] {
+    return sortedScores(analysis.character_tags).slice(0, 4);
   }
 </script>
 
@@ -168,11 +192,38 @@
       </div>
     {/if}
 
-    {#if visibleAnalysisTags(tagDetail).length > 0}
-      <div class="chip-row" style="margin-top: 10px;">
-        {#each visibleAnalysisTags(tagDetail) as [tag, score]}
-          <span class="chip">{tag}: {scorePercent(score)}</span>
-        {/each}
+    {#if visibleTagCount(tagDetail) > 0}
+      <div class="tag-groups">
+        {#if ratingTags(tagDetail).length > 0}
+          <div class="tag-group">
+            <strong>Ratings</strong>
+            <div class="chip-row">
+              {#each ratingTags(tagDetail) as [tag, score]}
+                <span class="chip">{tag}: {scorePercent(score)}</span>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if characterTags(tagDetail).length > 0}
+          <div class="tag-group">
+            <strong>Character</strong>
+            <div class="chip-row">
+              {#each visibleTags(characterTags(tagDetail)) as [tag, score]}
+                <span class="chip">{tag}: {scorePercent(score)}</span>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if generalTags(tagDetail).length > 0}
+          <div class="tag-group">
+            <strong>General</strong>
+            <div class="chip-row">
+              {#each visibleTags(generalTags(tagDetail)) as [tag, score]}
+                <span class="chip">{tag}: {scorePercent(score)}</span>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
       {#if hasHiddenAnalysisTags(tagDetail)}
         <div class="actions-row" style="margin-top: 8px;">
@@ -183,7 +234,7 @@
               showAllTags = !showAllTags;
             }}
           >
-            {showAllTags ? 'Show fewer tags' : `Show all ${allAnalysisTags(tagDetail).length} tags`}
+            {showAllTags ? 'Show fewer tags' : `Show all ${visibleTagCount(tagDetail)} tags`}
           </button>
         </div>
       {/if}
@@ -217,13 +268,23 @@
                 </p>
               </div>
               <span>{scorePercent(entry.analysis.illustration_score)}</span>
-              {#if topTags(entry.analysis).length > 0}
+              {#if topGeneralTags(entry.analysis).length > 0}
                 <div class="chip-row">
-                  {#each topTags(entry.analysis) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
+                  {#each topGeneralTags(entry.analysis) as [tag, score]}
+                    <span class="chip">general {tag}: {scorePercent(score)}</span>
                   {/each}
                 </div>
               {/if}
+              {#if topCharacterTags(entry.analysis).length > 0}
+                <div class="chip-row">
+                  {#each topCharacterTags(entry.analysis) as [tag, score]}
+                    <span class="chip">character {tag}: {scorePercent(score)}</span>
+                  {/each}
+                </div>
+              {/if}
+              <p>
+                stored {entry.analysis.stored_general_tag_count} general · {entry.analysis.stored_character_tag_count} character
+              </p>
             </div>
           {/each}
         </div>

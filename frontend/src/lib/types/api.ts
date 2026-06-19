@@ -10,7 +10,10 @@ export interface AnalysisProfile {
   model_name: string;
   model_version: string;
   scoring_version: string;
-  tag_persistence_threshold: number;
+  general_tag_storage_threshold: number;
+  character_tag_storage_threshold: number;
+  general_tag_display_threshold: number;
+  character_tag_display_threshold: number;
   auto_approve_threshold: number;
   enabled: boolean;
 }
@@ -22,8 +25,11 @@ export interface MediaAnalysis {
   model_version: string;
   scoring_version: string;
   illustration_score: number | null;
-  tags: Record<string, number>;
+  general_tags: Record<string, number>;
+  character_tags: Record<string, number>;
   ratings: Record<string, number>;
+  stored_general_tag_count: number;
+  stored_character_tag_count: number;
   error: string | null;
   analyzed_at: string | null;
 }

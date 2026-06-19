@@ -4,7 +4,12 @@ import json
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from upvote_monitor.db.models import MediaAnalysis, MediaAttachment, ReviewItem
+from upvote_monitor.db.models import (
+    AnalysisProfile,
+    MediaAnalysis,
+    MediaAttachment,
+    ReviewItem,
+)
 from upvote_monitor.enums import ApprovalStatus
 from upvote_monitor.services.download import (
     get_media_attachments,
@@ -16,6 +21,10 @@ from upvote_monitor.services.tagging.analysis import (
     get_attachment_analysis,
     get_attachment_analyses,
     get_item_analysis_summary,
+)
+from upvote_monitor.services.tagging.profiles import (
+    DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
+    DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
 )
 
 
@@ -59,10 +68,11 @@ class MediaAttachmentResponse(BaseModel):
             extension=attachment.extension,
             download_strategy=attachment.download_strategy.value,
             analysis=MediaAnalysisResponse.from_db(
-                get_attachment_analysis(session, attachment.id)
+                get_attachment_analysis(session, attachment.id),
+                session,
             ),
             analyses=[
-                MediaAnalysisResponse.from_analysis(analysis)
+                MediaAnalysisResponse.from_analysis(analysis, session)
                 for analysis in get_attachment_analyses(session, attachment.id)
             ],
         )
@@ -75,13 +85,23 @@ class MediaAnalysisResponse(BaseModel):
     model_version: str
     scoring_version: str
     illustration_score: float | None
-    tags: dict[str, float]
+    general_tags: dict[str, float]
+    character_tags: dict[str, float]
     ratings: dict[str, float]
+    stored_general_tag_count: int
+    stored_character_tag_count: int
     error: str | None
     analyzed_at: datetime | None
 
     @classmethod
-    def from_analysis(cls, analysis: MediaAnalysis) -> "MediaAnalysisResponse":
+    def from_analysis(
+        cls,
+        analysis: MediaAnalysis,
+        session: Session,
+    ) -> "MediaAnalysisResponse":
+        profile = session.get(AnalysisProfile, analysis.analysis_profile_id)
+        general_tags = _decode_scores(analysis.general_tags_json)
+        character_tags = _decode_scores(analysis.character_tags_json)
         return cls(
             analysis_profile_id=analysis.analysis_profile_id,
             status=analysis.status.value,
@@ -89,17 +109,38 @@ class MediaAnalysisResponse(BaseModel):
             model_version=analysis.model_version,
             scoring_version=analysis.scoring_version,
             illustration_score=analysis.illustration_score,
-            tags=_decode_scores(analysis.tags_json),
+            general_tags=_filter_scores(
+                general_tags,
+                threshold=(
+                    profile.general_tag_display_threshold
+                    if profile is not None
+                    else DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD
+                ),
+            ),
+            character_tags=_filter_scores(
+                character_tags,
+                threshold=(
+                    profile.character_tag_display_threshold
+                    if profile is not None
+                    else DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD
+                ),
+            ),
             ratings=_decode_scores(analysis.ratings_json),
+            stored_general_tag_count=len(general_tags),
+            stored_character_tag_count=len(character_tags),
             error=analysis.error,
             analyzed_at=analysis.analyzed_at,
         )
 
     @classmethod
-    def from_db(cls, analysis: MediaAnalysis | None) -> "MediaAnalysisResponse | None":
+    def from_db(
+        cls,
+        analysis: MediaAnalysis | None,
+        session: Session,
+    ) -> "MediaAnalysisResponse | None":
         if analysis is None:
             return None
-        return cls.from_analysis(analysis)
+        return cls.from_analysis(analysis, session)
 
 
 class ItemSummary(BaseModel):
@@ -204,3 +245,15 @@ def _decode_scores(value: str) -> dict[str, float]:
         if isinstance(key, str) and isinstance(score, int | float):
             result[key] = float(score)
     return result
+
+
+def _filter_scores(
+    scores: dict[str, float],
+    *,
+    threshold: float,
+) -> dict[str, float]:
+    return {
+        name: score
+        for name, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if score >= threshold
+    }

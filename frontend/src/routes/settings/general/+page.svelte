@@ -195,7 +195,7 @@
             <div>
               <strong>{activeProfile.model_name}</strong>
               <p>
-                {activeProfile.model_version} · {activeProfile.scoring_version} · approve {Math.round(activeProfile.auto_approve_threshold * 100)}% · show tags {Math.round(activeProfile.tag_persistence_threshold * 100)}%
+                {activeProfile.model_version} · {activeProfile.scoring_version} · approve {Math.round(activeProfile.auto_approve_threshold * 100)}% · general show {Math.round(activeProfile.general_tag_display_threshold * 100)}% · character show {Math.round(activeProfile.character_tag_display_threshold * 100)}%
               </p>
             </div>
           </div>

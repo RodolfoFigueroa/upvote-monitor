@@ -147,7 +147,10 @@ class AnalysisProfileResponse(BaseModel):
     model_name: str
     model_version: str
     scoring_version: str
-    tag_persistence_threshold: float
+    general_tag_storage_threshold: float
+    character_tag_storage_threshold: float
+    general_tag_display_threshold: float
+    character_tag_display_threshold: float
     auto_approve_threshold: float
     enabled: bool
 
@@ -159,7 +162,10 @@ class AnalysisProfileResponse(BaseModel):
             model_name=profile.model_name,
             model_version=profile.model_version,
             scoring_version=profile.scoring_version,
-            tag_persistence_threshold=profile.tag_persistence_threshold,
+            general_tag_storage_threshold=profile.general_tag_storage_threshold,
+            character_tag_storage_threshold=profile.character_tag_storage_threshold,
+            general_tag_display_threshold=profile.general_tag_display_threshold,
+            character_tag_display_threshold=profile.character_tag_display_threshold,
             auto_approve_threshold=profile.auto_approve_threshold,
             enabled=profile.enabled,
         )

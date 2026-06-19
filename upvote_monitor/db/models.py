@@ -81,7 +81,10 @@ class AnalysisProfile(SQLModel, table=True):
     model_name: str = Field(index=True)
     model_version: str = Field(default="main", index=True)
     scoring_version: str = Field(default="illustration-v1", index=True)
-    tag_persistence_threshold: float = Field(default=0.15)
+    general_tag_storage_threshold: float = Field(default=0.01)
+    character_tag_storage_threshold: float = Field(default=0.01)
+    general_tag_display_threshold: float = Field(default=0.15)
+    character_tag_display_threshold: float = Field(default=0.35)
     auto_approve_threshold: float = Field(default=0.90)
     enabled: bool = Field(default=True)
 
@@ -104,7 +107,8 @@ class MediaAnalysis(SQLModel, table=True):
     scoring_version: str = Field(default="illustration-v1", index=True)
     status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED, index=True)
     illustration_score: float | None = Field(default=None, index=True)
-    tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    general_tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    character_tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     ratings_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     error: str | None = None
     analyzed_at: datetime | None = None

@@ -93,7 +93,6 @@ def process_pending_analysis(
                 if settings.illustration_auto_approve_enabled
                 else None
             ),
-            tag_persistence_threshold=profile.tag_persistence_threshold,
         )
         result.analyzed += item_result.analyzed
         result.skipped += item_result.skipped
@@ -123,7 +122,6 @@ def analyze_item(
         tagger,
         force=True,
         auto_approve_threshold=None,
-        tag_persistence_threshold=profile.tag_persistence_threshold,
     )
     session.commit()
     return result
@@ -246,7 +244,6 @@ def _analyze_item(
     *,
     force: bool,
     auto_approve_threshold: float | None,
-    tag_persistence_threshold: float,
 ) -> AnalysisBatchResult:
     result = AnalysisBatchResult()
     scores = _existing_item_scores(session, item.id, profile) if not force else []
@@ -264,7 +261,6 @@ def _analyze_item(
             attachment,
             profile,
             tagger,
-            tag_persistence_threshold=tag_persistence_threshold,
         )
         if existing is not None:
             _replace_analysis(existing, analysis)
@@ -310,8 +306,6 @@ def _analyze_attachment(
     attachment: MediaAttachment,
     profile: AnalysisProfile,
     tagger: ImageTagger,
-    *,
-    tag_persistence_threshold: float,
 ) -> MediaAnalysis:
     assert attachment.id is not None
     preview_url = attachment.preview_url or attachment.download_url
@@ -343,17 +337,21 @@ def _analyze_attachment(
         tagger_result.character_tags,
         tagger_result.ratings,
     )
-    tags = _persisted_tags(
+    general_tags = _filter_scores(
         tagger_result.general_tags,
+        threshold=profile.general_tag_storage_threshold,
+    )
+    character_tags = _filter_scores(
         tagger_result.character_tags,
-        threshold=tag_persistence_threshold,
+        threshold=profile.character_tag_storage_threshold,
     )
     return _analysis_result(
         attachment.id,
         profile,
         AnalysisStatus.COMPLETED,
         illustration_score=score,
-        tags_json=json.dumps(tags, sort_keys=True),
+        general_tags_json=json.dumps(general_tags, sort_keys=True),
+        character_tags_json=json.dumps(character_tags, sort_keys=True),
         ratings_json=json.dumps(
             _filter_scores(tagger_result.ratings, threshold=0.0),
             sort_keys=True,
@@ -367,7 +365,8 @@ def _analysis_result(
     status: AnalysisStatus,
     *,
     illustration_score: float | None = None,
-    tags_json: str = "{}",
+    general_tags_json: str = "{}",
+    character_tags_json: str = "{}",
     ratings_json: str = "{}",
     error: str | None = None,
 ) -> MediaAnalysis:
@@ -379,7 +378,8 @@ def _analysis_result(
         scoring_version=profile.scoring_version,
         status=status,
         illustration_score=illustration_score,
-        tags_json=tags_json,
+        general_tags_json=general_tags_json,
+        character_tags_json=character_tags_json,
         ratings_json=ratings_json,
         error=error,
         analyzed_at=datetime.now(timezone.utc),
@@ -393,21 +393,11 @@ def _replace_analysis(target: MediaAnalysis, source: MediaAnalysis) -> None:
     target.scoring_version = source.scoring_version
     target.status = source.status
     target.illustration_score = source.illustration_score
-    target.tags_json = source.tags_json
+    target.general_tags_json = source.general_tags_json
+    target.character_tags_json = source.character_tags_json
     target.ratings_json = source.ratings_json
     target.error = source.error
     target.analyzed_at = source.analyzed_at
-
-
-def _persisted_tags(
-    general_tags: Mapping[str, float],
-    character_tags: Mapping[str, float],
-    *,
-    threshold: float,
-) -> dict[str, float]:
-    combined = dict(general_tags)
-    combined.update(character_tags)
-    return _filter_scores(combined, threshold=threshold)
 
 
 def _filter_scores(

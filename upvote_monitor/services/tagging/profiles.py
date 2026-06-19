@@ -9,6 +9,10 @@ from upvote_monitor.db.models import (
 )
 
 SCORING_VERSION = "illustration-v1"
+DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD = 0.01
+DEFAULT_CHARACTER_TAG_STORAGE_THRESHOLD = 0.01
+DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD = 0.15
+DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD = 0.35
 
 
 @dataclass(frozen=True)
@@ -18,7 +22,10 @@ class BuiltInAnalysisProfile:
     model_name: str
     model_version: str
     scoring_version: str
-    tag_persistence_threshold: float
+    general_tag_storage_threshold: float
+    character_tag_storage_threshold: float
+    general_tag_display_threshold: float
+    character_tag_display_threshold: float
     auto_approve_threshold: float
     enabled: bool = True
 
@@ -30,7 +37,10 @@ BUILT_IN_ANALYSIS_PROFILES = (
         model_name="SmilingWolf/wd-swinv2-tagger-v3",
         model_version="main",
         scoring_version=SCORING_VERSION,
-        tag_persistence_threshold=0.15,
+        general_tag_storage_threshold=DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD,
+        character_tag_storage_threshold=DEFAULT_CHARACTER_TAG_STORAGE_THRESHOLD,
+        general_tag_display_threshold=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+        character_tag_display_threshold=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
         auto_approve_threshold=0.90,
     ),
     BuiltInAnalysisProfile(
@@ -39,7 +49,10 @@ BUILT_IN_ANALYSIS_PROFILES = (
         model_name="SmilingWolf/wd-v1-4-vit-tagger-v2",
         model_version="main",
         scoring_version=SCORING_VERSION,
-        tag_persistence_threshold=0.15,
+        general_tag_storage_threshold=DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD,
+        character_tag_storage_threshold=DEFAULT_CHARACTER_TAG_STORAGE_THRESHOLD,
+        general_tag_display_threshold=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+        character_tag_display_threshold=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
         auto_approve_threshold=0.90,
     ),
 )
@@ -57,7 +70,18 @@ def ensure_default_analysis_profiles(session: Session) -> None:
                     model_name=profile.model_name,
                     model_version=profile.model_version,
                     scoring_version=profile.scoring_version,
-                    tag_persistence_threshold=profile.tag_persistence_threshold,
+                    general_tag_storage_threshold=(
+                        profile.general_tag_storage_threshold
+                    ),
+                    character_tag_storage_threshold=(
+                        profile.character_tag_storage_threshold
+                    ),
+                    general_tag_display_threshold=(
+                        profile.general_tag_display_threshold
+                    ),
+                    character_tag_display_threshold=(
+                        profile.character_tag_display_threshold
+                    ),
                     auto_approve_threshold=profile.auto_approve_threshold,
                     enabled=profile.enabled,
                 )

@@ -58,7 +58,7 @@ class FakeTagger:
                 "1girl": 0.92,
                 "solo": 0.86,
             },
-            character_tags={},
+            character_tags={"hatsune_miku": 0.91},
         )
         self.paths: list[Path] = []
 
@@ -112,7 +112,10 @@ def add_settings(
     tagger_enabled: bool = True,
     auto_approve_enabled: bool = True,
     threshold: float = 0.9,
-    tag_persistence_threshold: float = 0.15,
+    general_storage_threshold: float = 0.01,
+    character_storage_threshold: float = 0.01,
+    general_display_threshold: float = 0.15,
+    character_display_threshold: float = 0.35,
     profile_id: str = TEST_PROFILE_ID,
 ) -> None:
     session.add(
@@ -122,7 +125,10 @@ def add_settings(
             model_name=FakeTagger.model_name,
             model_version=FakeTagger.model_version,
             scoring_version=SCORING_VERSION,
-            tag_persistence_threshold=tag_persistence_threshold,
+            general_tag_storage_threshold=general_storage_threshold,
+            character_tag_storage_threshold=character_storage_threshold,
+            general_tag_display_threshold=general_display_threshold,
+            character_tag_display_threshold=character_display_threshold,
             auto_approve_threshold=threshold,
         )
     )
@@ -195,15 +201,17 @@ def test_pending_analysis_persists_tags_and_auto_approves(
         assert len(analyses) == 1
         assert analyses[0].status == AnalysisStatus.COMPLETED
         assert analyses[0].illustration_score is not None
-        assert "manga" in analyses[0].tags_json
+        assert "manga" in analyses[0].general_tags_json
+        assert "hatsune_miku" in analyses[0].character_tags_json
 
         detail = ItemDetail.from_db(item, session)
         assert detail.illustration_score == analyses[0].illustration_score
         assert detail.media[0].analysis is not None
-        assert detail.media[0].analysis.tags["manga"] == 0.94
+        assert detail.media[0].analysis.general_tags["manga"] == 0.94
+        assert detail.media[0].analysis.character_tags["hatsune_miku"] == 0.91
 
 
-def test_pending_analysis_uses_configured_tag_persistence_threshold(
+def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
     engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -219,21 +227,43 @@ def test_pending_analysis_uses_configured_tag_persistence_threshold(
         add_settings(
             session,
             auto_approve_enabled=False,
-            tag_persistence_threshold=0.9,
+            general_storage_threshold=0.01,
+            character_storage_threshold=0.01,
+            general_display_threshold=0.9,
+            character_display_threshold=0.9,
         )
         item = make_item("tag-threshold")
         session.add(item)
         session.add(make_attachment(item.id))
         session.commit()
 
-        process_pending_analysis(session, FakeTagger())
+        process_pending_analysis(
+            session,
+            FakeTagger(
+                WDTaggerResult(
+                    ratings={"safe": 0.96},
+                    general_tags={
+                        "manga": 0.94,
+                        "solo": 0.86,
+                        "low_general": 0.1,
+                    },
+                    character_tags={
+                        "hatsune_miku": 0.91,
+                        "low_character": 0.2,
+                    },
+                )
+            ),
+        )
 
+        analysis = session.exec(select(MediaAnalysis)).one()
         detail = ItemDetail.from_db(item, session)
         assert detail.media[0].analysis is not None
-        assert detail.media[0].analysis.tags == {
-            "manga": 0.94,
-            "1girl": 0.92,
-        }
+        assert "low_general" in analysis.general_tags_json
+        assert "low_character" in analysis.character_tags_json
+        assert detail.media[0].analysis.general_tags == {"manga": 0.94}
+        assert detail.media[0].analysis.character_tags == {"hatsune_miku": 0.91}
+        assert detail.media[0].analysis.stored_general_tag_count == 3
+        assert detail.media[0].analysis.stored_character_tag_count == 2
 
 
 def test_item_detail_uses_active_profile_and_preserves_other_analyses(
@@ -256,7 +286,10 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 model_name="other/model",
                 model_version="main",
                 scoring_version="illustration-v2",
-                tag_persistence_threshold=0.2,
+                general_tag_storage_threshold=0.01,
+                character_tag_storage_threshold=0.01,
+                general_tag_display_threshold=0.2,
+                character_tag_display_threshold=0.35,
                 auto_approve_threshold=0.8,
             )
         )
@@ -270,7 +303,8 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 scoring_version=SCORING_VERSION,
                 status=AnalysisStatus.COMPLETED,
                 illustration_score=0.91,
-                tags_json='{"manga": 0.91}',
+                general_tags_json='{"manga": 0.91}',
+                character_tags_json='{"hatsune_miku": 0.92}',
                 ratings_json="{}",
             )
         )
@@ -283,7 +317,8 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 scoring_version="illustration-v2",
                 status=AnalysisStatus.COMPLETED,
                 illustration_score=0.22,
-                tags_json='{"realistic": 0.8}',
+                general_tags_json='{"realistic": 0.8}',
+                character_tags_json="{}",
                 ratings_json="{}",
             )
         )
@@ -341,7 +376,7 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
         WDTaggerResult(
             ratings={"safe": 0.7},
             general_tags={"realistic": 0.9, "photo_background": 0.8},
-            character_tags={},
+            character_tags={"real_person": 0.9},
         )
     )
     second_tagger = FakeTagger()
@@ -367,10 +402,12 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
         assert item.approval_status == ApprovalStatus.UNDER_REVIEW
         assert len(analyses) == 1
         assert first_detail.media[0].analysis is not None
-        assert first_detail.media[0].analysis.tags["realistic"] == 0.9
+        assert first_detail.media[0].analysis.general_tags["realistic"] == 0.9
+        assert first_detail.media[0].analysis.character_tags["real_person"] == 0.9
         assert second_detail.media[0].analysis is not None
-        assert second_detail.media[0].analysis.tags["manga"] == 0.94
-        assert "realistic" not in second_detail.media[0].analysis.tags
+        assert second_detail.media[0].analysis.general_tags["manga"] == 0.94
+        assert second_detail.media[0].analysis.character_tags["hatsune_miku"] == 0.91
+        assert "realistic" not in second_detail.media[0].analysis.general_tags
 
 
 def test_refresh_runs_analysis_between_ingest_and_download(
