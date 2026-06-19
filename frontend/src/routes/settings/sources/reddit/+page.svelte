@@ -137,14 +137,15 @@
           sources: {
             reddit: {
               enabled: false,
+              username: '',
               session_cookie: '',
             },
           },
         })
       );
-      message = 'Reddit tokens cleared and source disabled';
+      message = 'Reddit credentials cleared and source disabled';
     } catch (e) {
-      handleSourceError(e, 'Failed to clear tokens');
+      handleSourceError(e, 'Failed to clear credentials');
     } finally {
       clearing = false;
     }
@@ -233,6 +234,7 @@
             bind:value={draft.username}
             data-invalid={isInvalid('username')}
             aria-invalid={isInvalid('username')}
+            disabled={!secretsAvailable}
             oninput={() => clearInvalidField('username')}
           />
         </div>
@@ -288,7 +290,7 @@
           disabled={saving || clearing || dirty || !sessionCookieConfigured || !secretsAvailable}
         >
           <Trash2 size={16} />
-          {clearing ? 'Clearing' : 'Clear tokens'}
+          {clearing ? 'Clearing' : 'Clear credentials'}
         </button>
       </div>
     </section>

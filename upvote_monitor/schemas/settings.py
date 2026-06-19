@@ -3,7 +3,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from upvote_monitor.db.models import AppSettings, SourceSettings
 from upvote_monitor.enums import ApprovalMode
-from upvote_monitor.services.secrets import SecretStore
+from upvote_monitor.services.secrets import (
+    SecretStore,
+    SecretStoreInvalid,
+    SecretStoreUnavailable,
+)
 from upvote_monitor.services.source_settings import (
     REDDIT_MAX_PAGE_LIMIT,
     REDDIT_MIN_PAGE_LIMIT,
@@ -16,6 +20,15 @@ from upvote_monitor.services.source_settings import (
     reddit_options_from_source_settings,
     x_options_from_source_settings,
 )
+
+
+def _reddit_username_from_secret_store(secret_store: SecretStore) -> str:
+    if not secret_store.available:
+        return ""
+    try:
+        return secret_store.get_source_secrets(REDDIT_SOURCE).get("username", "").strip()
+    except (SecretStoreInvalid, SecretStoreUnavailable):
+        return ""
 
 
 class RedditSourceSettingsResponse(BaseModel):
@@ -38,7 +51,7 @@ class RedditSourceSettingsResponse(BaseModel):
         options = reddit_options_from_source_settings(source_settings)
         return cls(
             enabled=source_settings.enabled if source_settings is not None else True,
-            username=options.username,
+            username=_reddit_username_from_secret_store(secret_store),
             page_limit=options.page_limit,
             page_size=options.page_size,
             user_agent=options.user_agent,

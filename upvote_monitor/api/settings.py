@@ -201,16 +201,19 @@ def _prepare_reddit_update(
     )
 
     options = REDDIT_DEFAULT_OPTIONS | decode_options(reddit_settings)
-    if reddit_update.username is not None:
-        options["username"] = reddit_update.username
+    options.pop("username", None)
     if reddit_update.page_limit is not None:
         options["page_limit"] = reddit_update.page_limit
     if reddit_update.user_agent is not None:
         options["user_agent"] = reddit_update.user_agent
 
     secret_updates = {
-        "session_cookie": reddit_update.session_cookie,
-    } if "session_cookie" in reddit_update.model_fields_set else {}
+        field: getattr(reddit_update, field)
+        for field in REDDIT_REQUIRED_CREDENTIAL_FIELDS
+        if field in reddit_update.model_fields_set
+    }
+    if reddit_update.session_cookie == "":
+        secret_updates["username"] = ""
     has_new_secret = _has_new_secret(secret_updates)
     needs_credentials = next_enabled or has_new_secret
     current_secrets = (
@@ -222,7 +225,7 @@ def _prepare_reddit_update(
 
     if needs_credentials:
         missing = []
-        if not str(options.get("username", "")).strip():
+        if not effective_secrets.get("username"):
             missing.append("username")
         if not effective_secrets.get("session_cookie"):
             missing.append("session_cookie")
@@ -232,7 +235,7 @@ def _prepare_reddit_update(
     if has_new_secret or (next_enabled and not was_enabled):
         try:
             validate_reddit_credentials(
-                username=str(options["username"]),
+                username=effective_secrets["username"],
                 session_cookie=effective_secrets["session_cookie"],
                 user_agent=str(options["user_agent"]),
             )
@@ -393,6 +396,6 @@ def update_settings(
         session.refresh(plan.source_settings)
 
     if "refresh_cron" in updates or "refresh_enabled" in updates:
-        reschedule_from_settings()
+        reschedule_from_settings(settings)
 
     return _settings_response(session, settings)

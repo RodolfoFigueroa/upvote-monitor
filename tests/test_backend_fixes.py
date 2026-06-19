@@ -337,14 +337,19 @@ def test_secret_store_encrypts_source_secrets(tmp_path: Path) -> None:
     secret_path = tmp_path / "secrets.enc"
     store = SecretStore(secret_key="plain text key", path=secret_path)
 
-    store.update_source_secrets(REDDIT_SOURCE, {"session_cookie": "cookie-value"})
+    store.update_source_secrets(
+        REDDIT_SOURCE,
+        {"username": "myusername", "session_cookie": "cookie-value"},
+    )
 
     assert b"cookie-value" not in secret_path.read_bytes()
+    assert b"myusername" not in secret_path.read_bytes()
+    assert store.get_source_secrets(REDDIT_SOURCE)["username"] == "myusername"
     assert store.get_source_secrets(REDDIT_SOURCE)["session_cookie"] == "cookie-value"
     assert store.source_secret_prefix(REDDIT_SOURCE, "session_cookie") == "cook"
     assert store.source_secret_suffix(REDDIT_SOURCE, "session_cookie") == "alue"
 
-    store.update_source_secrets(REDDIT_SOURCE, {"session_cookie": ""})
+    store.update_source_secrets(REDDIT_SOURCE, {"username": "", "session_cookie": ""})
     assert store.get_source_secrets(REDDIT_SOURCE) == {}
 
 
@@ -395,7 +400,7 @@ def test_settings_update_stores_reddit_secret_write_only(
                     "sources": {
                         "reddit": {
                             "enabled": True,
-                            "username": "lain",
+                            "username": "myusername",
                             "page_limit": 5,
                             "user_agent": "agent/1.0",
                             "session_cookie": "secret-cookie",
@@ -406,15 +411,22 @@ def test_settings_update_stores_reddit_secret_write_only(
             session,
         )
 
-        assert response.sources.reddit.username == "lain"
+        assert response.sources.reddit.username == "myusername"
         assert response.sources.reddit.page_limit == 5
         assert response.sources.reddit.session_cookie_configured is True
         assert response.sources.reddit.session_cookie_prefix == "secr"
         assert response.sources.reddit.session_cookie_suffix == "okie"
         assert "secret-cookie" not in response.model_dump_json()
+        assert store_factory().get_source_secrets(REDDIT_SOURCE) == {
+            "username": "myusername",
+            "session_cookie": "secret-cookie",
+        }
+        reddit_settings = session.get(SourceSettings, REDDIT_SOURCE)
+        assert reddit_settings is not None
+        assert "username" not in reddit_settings.options_json
         assert probe_calls == [
             {
-                "username": "lain",
+                "username": "myusername",
                 "session_cookie": "secret-cookie",
                 "user_agent": "agent/1.0",
             }
@@ -428,7 +440,9 @@ def test_settings_update_stores_reddit_secret_write_only(
         )
 
         assert response.sources.reddit.session_cookie_configured is False
+        assert response.sources.reddit.username == ""
         assert response.sources.reddit.enabled is False
+        assert store_factory().get_source_secrets(REDDIT_SOURCE) == {}
 
 
 def test_settings_update_stores_x_secrets_write_only(
@@ -560,7 +574,7 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
         with pytest.raises(Exception) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
-                    {"sources": {"reddit": {"enabled": True, "username": "lain"}}}
+                    {"sources": {"reddit": {"enabled": True, "username": "myusername"}}}
                 ),
                 session,
             )
@@ -571,6 +585,7 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
         )
         assert getattr(exc_info.value, "detail", {})["fields"] == ["session_cookie"]
         assert session.get(SourceSettings, REDDIT_SOURCE) is None
+        assert store_factory().get_source_secrets(REDDIT_SOURCE) == {}
 
 
 def test_settings_update_rejects_enabled_x_missing_twid(
@@ -669,7 +684,7 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
                         "sources": {
                             "reddit": {
                                 "enabled": True,
-                                "username": "lain",
+                                "username": "myusername",
                                 "session_cookie": "secret-cookie",
                             }
                         }

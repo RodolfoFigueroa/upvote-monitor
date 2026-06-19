@@ -9,7 +9,6 @@ from upvote_monitor.db.models import SourceSettings
 REDDIT_SOURCE = "reddit"
 X_SOURCE = "x"
 REDDIT_DEFAULT_OPTIONS = {
-    "username": "",
     "page_limit": 10,
     "page_size": 100,
     "user_agent": "MyPersonalArchiveScript/1.0",
@@ -35,7 +34,6 @@ X_MAX_PAGE_SIZE = 100
 
 @dataclass(frozen=True)
 class RedditSourceOptions:
-    username: str
     page_limit: int
     page_size: int
     user_agent: str
@@ -112,7 +110,6 @@ def reddit_options_from_source_settings(
 ) -> RedditSourceOptions:
     options = REDDIT_DEFAULT_OPTIONS | decode_options(source_settings)
     return RedditSourceOptions(
-        username=str(options.get("username", "")).strip(),
         page_limit=clamp_reddit_page_limit(int(options.get("page_limit", 10))),
         page_size=100,
         user_agent=str(options.get("user_agent", "")).strip()

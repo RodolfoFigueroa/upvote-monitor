@@ -493,7 +493,7 @@ def test_source_providers_use_reddit_source_settings(
     secret_path = tmp_path / "secrets.enc"
     SecretStore(secret_key="provider-key", path=secret_path).update_source_secrets(
         REDDIT_SOURCE,
-        {"session_cookie": "cookie"},
+        {"username": "myusername", "session_cookie": "cookie"},
     )
 
     def store_factory() -> SecretStore:
@@ -508,7 +508,7 @@ def test_source_providers_use_reddit_source_settings(
                 enabled=True,
                 options_json=encode_options(
                     {
-                        "username": "lain",
+                        "username": "ignored-option",
                         "page_limit": 4,
                         "page_size": 100,
                         "user_agent": "agent/1.0",
@@ -523,7 +523,7 @@ def test_source_providers_use_reddit_source_settings(
     assert len(providers) == 1
     provider = providers[0]
     assert provider.source == REDDIT_SOURCE
-    assert getattr(provider, "username") == "lain"
+    assert getattr(provider, "username") == "myusername"
     assert getattr(provider, "session_cookie") == "cookie"
     assert getattr(provider, "user_agent") == "agent/1.0"
     assert getattr(provider, "page_size") == 100
@@ -625,7 +625,7 @@ def test_source_providers_skip_unconfigured_reddit(engine: Engine) -> None:
             SourceSettings(
                 source=REDDIT_SOURCE,
                 enabled=True,
-                options_json=encode_options({"username": "lain", "page_limit": 10}),
+                options_json=encode_options({"page_limit": 10}),
             )
         )
         session.commit()
@@ -828,7 +828,7 @@ def test_reddit_upvoted_generator_stops_at_page_limit(
 
     list(
         upvoted_posts_generator(
-            username="lain",
+            username="myusername",
             session_cookie="cookie",
             user_agent="agent/1.0",
             page_size=100,

@@ -44,30 +44,38 @@ def get_source_providers(session: Session) -> list[SourceProvider]:
     reddit_settings = session.get(SourceSettings, REDDIT_SOURCE)
     if reddit_settings is not None and reddit_settings.enabled:
         reddit_options = reddit_options_from_source_settings(reddit_settings)
-        if reddit_options.username:
-            try:
-                reddit_secrets = secret_store.get_source_secrets(REDDIT_SOURCE)
-            except (SecretStoreInvalid, SecretStoreUnavailable):
-                logger.warning("Reddit source is enabled but secrets are unavailable")
-                reddit_secrets = {}
+        try:
+            reddit_secrets = secret_store.get_source_secrets(REDDIT_SOURCE)
+        except (SecretStoreInvalid, SecretStoreUnavailable):
+            logger.warning("Reddit source is enabled but secrets are unavailable")
+            reddit_secrets = {}
 
-            session_cookie = reddit_secrets.get("session_cookie", "")
-            if session_cookie:
-                providers.append(
-                    RedditProvider(
-                        username=reddit_options.username,
-                        session_cookie=session_cookie,
-                        user_agent=reddit_options.user_agent,
-                        page_size=reddit_options.page_size,
-                        page_limit=reddit_options.page_limit,
-                    )
+        username = reddit_secrets.get("username", "").strip()
+        session_cookie = reddit_secrets.get("session_cookie", "")
+        if username and session_cookie:
+            providers.append(
+                RedditProvider(
+                    username=username,
+                    session_cookie=session_cookie,
+                    user_agent=reddit_options.user_agent,
+                    page_size=reddit_options.page_size,
+                    page_limit=reddit_options.page_limit,
                 )
-            else:
-                logger.warning(
-                    "Reddit source is enabled but session_cookie is not configured"
-                )
+            )
         else:
-            logger.warning("Reddit source is enabled but username is not configured")
+            missing_fields = [
+                field
+                for field, value in {
+                    "username": username,
+                    "session_cookie": session_cookie,
+                }.items()
+                if not value
+            ]
+            logger.warning(
+                "Reddit source is enabled but required credential fields are "
+                "missing: %s",
+                ", ".join(missing_fields),
+            )
 
     x_settings = session.get(SourceSettings, X_SOURCE)
     if x_settings is not None and x_settings.enabled:
