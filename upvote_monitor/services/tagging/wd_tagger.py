@@ -8,7 +8,7 @@ import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from PIL import Image
 
-DEFAULT_MODEL_REPO_ID = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+DEFAULT_MODEL_REPO_ID = "SmilingWolf/wd-swinv2-tagger-v3"
 MODEL_FILENAME = "model.onnx"
 TAGS_FILENAME = "selected_tags.csv"
 MODEL_CACHE_DIR = Path("/data/models/wd-tagger")
