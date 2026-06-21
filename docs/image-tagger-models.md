@@ -22,17 +22,17 @@ The most interesting newer alternative is `pixai-labs/pixai-tagger-v0.9`, especi
 
 ## Candidate Models
 
-| Model | License | Runtime / Files | Size / Cost | Notes | Fit |
-| --- | --- | --- | --- | --- | --- |
-| [`SmilingWolf/wd-swinv2-tagger-v3`](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | 98M params | Supports ratings, characters, and general tags. Trained on Danbooru through 2024-02. Requires `onnxruntime >= 1.17.0`. | Best default |
-| [`SmilingWolf/wd-eva02-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Strongest published WD v3 validation score, but much heavier than SwinV2. | Best quality mode |
-| [`SmilingWolf/wd-vit-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Second-best published WD v3 validation score. Similar file size to EVA02-Large. | Alternate quality mode |
-| [`pixai-labs/pixai-tagger-v0.9`](https://huggingface.co/pixai-labs/pixai-tagger-v0.9) | Apache-2.0 | PyTorch checkpoint, gated base repo | ~1.27 GB checkpoint | Newer Danbooru snapshot, about 13.5k tags, recall-oriented, strong character coverage. | High-quality candidate |
-| [`deepghs/pixai-tagger-v0.9-onnx`](https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx) | Apache-2.0 | ONNX | 317.9M params, 448x448 input | ONNX export of PixAI Tagger. Includes 9,741 general tags and 3,720 character tags. Recommended thresholds: general `0.3`, character `0.85`. | Implemented PixAI route |
-| [`Camais03/camie-tagger-v2`](https://huggingface.co/Camais03/camie-tagger-v2) | GPL-3.0 | ONNX, safetensors | 143M params reported | 70,527 possible tags, trained on Danbooru 2024 data, strong reported character/copyright/rating performance. | Benchmark only (GPL license is acceptable) |
-| [`fancyfeast/joytag`](https://huggingface.co/fancyfeast/joytag) | Apache-2.0 | ONNX, safetensors, Transformers | 91.5M params | Sparse model card, but lightweight and Danbooru-style tags are available through `top_tags.txt`. | Lightweight alternative |
-| [`lodestones/taggerine`](https://huggingface.co/lodestones/taggerine) | Apache-2.0 | safetensors, PyTorch | ~5.3 GB weights; ~632M backbone + ~480M head params | DINOv3 ViT-H/16+ booru tagger with 74,625 tags from Danbooru and e621. CPU mode exists but will be slow. | Power-user only |
-| [`oovm/deep-danbooru`](https://huggingface.co/oovm/deep-danbooru) and other DeepDanbooru ports | Varies | ONNX variants exist | Older | Useful as a legacy baseline, but less attractive than WD v3 or newer taggers. | Legacy fallback |
+| Model | License | Runtime / Files | Size / Cost | Notes | Fit | Implemented? |
+| --- | --- | --- | --- | --- | --- | --- |
+| [`SmilingWolf/wd-swinv2-tagger-v3`](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | 98M params | Supports ratings, characters, and general tags. Trained on Danbooru through 2024-02. Requires `onnxruntime >= 1.17.0`. | Best default | Yes | 
+| [`SmilingWolf/wd-eva02-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Strongest published WD v3 validation score, but much heavier than SwinV2. | Best quality mode | Yes |
+| [`SmilingWolf/wd-vit-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Second-best published WD v3 validation score. Similar file size to EVA02-Large. | Alternate quality mode | Yes |
+| [`pixai-labs/pixai-tagger-v0.9`](https://huggingface.co/pixai-labs/pixai-tagger-v0.9) | Apache-2.0 | PyTorch checkpoint, gated base repo | ~1.27 GB checkpoint | Newer Danbooru snapshot, about 13.5k tags, recall-oriented, strong character coverage. | High-quality candidate | No, in favor of ONNX version below |
+| [`deepghs/pixai-tagger-v0.9-onnx`](https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx) | Apache-2.0 | ONNX | 317.9M params, 448x448 input | ONNX export of PixAI Tagger. Includes 9,741 general tags and 3,720 character tags. Recommended thresholds: general `0.3`, character `0.85`. | Best option for PixAI | Yes |
+| [`Camais03/camie-tagger-v2`](https://huggingface.co/Camais03/camie-tagger-v2) | GPL-3.0 | ONNX, safetensors | 143M params reported | 70,527 possible tags, trained on Danbooru 2024 data, strong reported character/copyright/rating performance. | Benchmark only (GPL license is acceptable) | No |
+| [`fancyfeast/joytag`](https://huggingface.co/fancyfeast/joytag) | Apache-2.0 | ONNX, safetensors, Transformers | 91.5M params | Sparse model card, but lightweight and Danbooru-style tags are available through `top_tags.txt`. | Lightweight alternative | No |
+| [`lodestones/taggerine`](https://huggingface.co/lodestones/taggerine) | Apache-2.0 | safetensors, PyTorch | ~5.3 GB weights; ~632M backbone + ~480M head params | DINOv3 ViT-H/16+ booru tagger with 74,625 tags from Danbooru and e621. CPU mode exists but will be slow. | Power-user only | No |
+| [`oovm/deep-danbooru`](https://huggingface.co/oovm/deep-danbooru) and other DeepDanbooru ports | Varies | ONNX variants exist | Older | Useful as a legacy baseline, but less attractive than WD v3 or newer taggers. | Legacy fallback | No |
 
 ## Recommendation
 
