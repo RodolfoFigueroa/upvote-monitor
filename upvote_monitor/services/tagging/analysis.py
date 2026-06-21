@@ -23,6 +23,10 @@ from upvote_monitor.services.preview_cache import (
 from upvote_monitor.services.media_workflow import set_media_decision
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.profiles import active_analysis_profile
+from upvote_monitor.services.tagging.pixai_tagger import (
+    PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
+    get_pixai_tagger,
+)
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult, get_wd_tagger
 
 logger = logging.getLogger(__name__)
@@ -455,6 +459,8 @@ def _maybe_auto_approve_attachment(
 
 def _default_tagger(profile: AnalysisProfile) -> ImageTagger:
     try:
+        if profile.model_name == PIXAI_TAGGER_V0_9_ONNX_REPO_ID:
+            return get_pixai_tagger(profile.model_name, profile.model_version)
         return get_wd_tagger(profile.model_name, profile.model_version)
     except Exception as exc:
         raise TaggerUnavailableError(

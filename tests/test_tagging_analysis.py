@@ -2,8 +2,10 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pytest
 from fastapi import BackgroundTasks
+from PIL import Image
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -36,6 +38,12 @@ from upvote_monitor.services.tagging.profiles import (
     BUILT_IN_ANALYSIS_PROFILES,
     SCORING_VERSION,
     ensure_default_analysis_profiles,
+)
+import upvote_monitor.services.tagging.pixai_tagger as pixai_tagger_module
+from upvote_monitor.services.tagging.pixai_tagger import (
+    PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
+    PixAITagger,
+    _scores_to_probabilities,
 )
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import (
@@ -209,12 +217,19 @@ def test_default_analysis_profiles_include_best_smilingwolf_v3_models(
             for profile in session.exec(select(AnalysisProfile)).all()
         }
         assert {profile.id for profile in BUILT_IN_ANALYSIS_PROFILES} <= set(profiles)
-        assert len(BUILT_IN_ANALYSIS_PROFILES) == 3
+        assert len(BUILT_IN_ANALYSIS_PROFILES) == 4
         assert profiles[DEFAULT_ANALYSIS_PROFILE_ID].model_name == WD_SWINV2_V3_REPO_ID
         assert profiles["wd-eva02-large-v3"].model_name == WD_EVA02_LARGE_V3_REPO_ID
         assert profiles["wd-eva02-large-v3"].auto_approve_threshold == 0.92
         assert profiles["wd-vit-large-v3"].model_name == WD_VIT_LARGE_V3_REPO_ID
         assert profiles["wd-vit-large-v3"].auto_approve_threshold == 0.92
+        assert profiles["pixai-v0-9-onnx"].model_name == (
+            PIXAI_TAGGER_V0_9_ONNX_REPO_ID
+        )
+        assert profiles["pixai-v0-9-onnx"].general_tag_storage_threshold == 0.30
+        assert profiles["pixai-v0-9-onnx"].character_tag_storage_threshold == 0.85
+        assert profiles["pixai-v0-9-onnx"].auto_approve_threshold == 0.97
+        assert profiles["pixai-v0-9-onnx"].enabled is True
         assert "wd-v1-4-vit-v2" not in profiles
         assert WD_COMPATIBLE_MODEL_REPOS == (
             WD_SWINV2_V3_REPO_ID,
@@ -267,6 +282,116 @@ def test_default_analysis_profiles_disable_deprecated_v2_profile(
 def test_wd_tagger_rejects_incompatible_model_repo() -> None:
     with pytest.raises(ValueError, match="not supported by the WD tagger"):
         get_wd_tagger("unsupported/model")
+
+
+def test_pixai_tagger_rejects_incompatible_model_repo() -> None:
+    with pytest.raises(ValueError, match="not supported by the PixAI tagger"):
+        PixAITagger(repo_id="unsupported/model")
+
+
+def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "model.onnx"
+    tags_path = tmp_path / "selected_tags.csv"
+    preprocess_path = tmp_path / "preprocess.json"
+    image_path = tmp_path / "image.png"
+
+    model_path.write_bytes(b"onnx")
+    tags_path.write_text(
+        "\n".join(
+            [
+                "name,category",
+                "manga,0",
+                "hatsune_miku,4",
+                "ignored_copyright,3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    preprocess_path.write_text(
+        (
+            '{"stages": ['
+            '{"type": "resize", "size": [2, 2]}, '
+            '{"type": "to_tensor"}, '
+            '{"type": "normalize", "mean": [0.5, 0.5, 0.5], '
+            '"std": [0.5, 0.5, 0.5]}'
+            "]}"
+        ),
+        encoding="utf-8",
+    )
+    Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(image_path)
+
+    paths = {
+        "model.onnx": model_path,
+        "selected_tags.csv": tags_path,
+        "preprocess.json": preprocess_path,
+    }
+
+    def fake_download(
+        repo_id: str,
+        filename: str,
+        *,
+        revision: str,
+        cache_dir: str,
+    ) -> str:
+        assert repo_id == PIXAI_TAGGER_V0_9_ONNX_REPO_ID
+        assert revision == "main"
+        assert cache_dir
+        return str(paths[filename])
+
+    class FakeInput:
+        name = "pixel_values"
+        shape = [1, 3, 2, 2]
+
+    class FakeSession:
+        instances: list["FakeSession"] = []
+
+        def __init__(self, model: str, *, providers: list[str]) -> None:
+            assert model == str(model_path)
+            assert providers == ["CPUExecutionProvider"]
+            self.input_array: np.ndarray | None = None
+            FakeSession.instances.append(self)
+
+        def get_inputs(self) -> list[FakeInput]:
+            return [FakeInput()]
+
+        def run(
+            self,
+            _output_names: object,
+            inputs: dict[str, np.ndarray],
+        ) -> list[np.ndarray]:
+            self.input_array = inputs["pixel_values"]
+            return [
+                np.asarray([[42.0, 43.0]], dtype=np.float32),
+                np.asarray([[2.0, -2.0, 0.25]], dtype=np.float32),
+            ]
+
+    monkeypatch.setattr(pixai_tagger_module, "hf_hub_download", fake_download)
+    monkeypatch.setattr(pixai_tagger_module.ort, "InferenceSession", FakeSession)
+
+    result = PixAITagger(cache_dir=tmp_path / "cache").tag_image(image_path)
+
+    assert result.ratings == {}
+    assert result.general_tags == {"manga": pytest.approx(0.880797)}
+    assert result.character_tags == {"hatsune_miku": pytest.approx(0.119203)}
+    session = FakeSession.instances[0]
+    assert session.input_array is not None
+    assert session.input_array.shape == (1, 3, 2, 2)
+    assert session.input_array[0, :, 0, 0].tolist() == pytest.approx(
+        [1.0, -1.0, -1.0]
+    )
+
+
+def test_pixai_scores_only_apply_sigmoid_to_logits() -> None:
+    probabilities = _scores_to_probabilities(
+        np.asarray([0.20, 0.70], dtype=np.float32)
+    )
+    logits = _scores_to_probabilities(np.asarray([-2.0, 2.0], dtype=np.float32))
+
+    assert probabilities.tolist() == pytest.approx([0.20, 0.70])
+    assert logits.tolist() == pytest.approx([0.119203, 0.880797])
 
 
 def test_pending_analysis_persists_tags_and_auto_approves(
@@ -346,6 +471,57 @@ def test_pending_analysis_uses_selected_eva02_profile(
         assert result.analyzed == 1
         assert analysis.analysis_profile_id == "wd-eva02-large-v3"
         assert analysis.model_name == WD_EVA02_LARGE_V3_REPO_ID
+        assert analysis.scoring_version == SCORING_VERSION
+
+
+def test_pending_analysis_uses_selected_pixai_profile(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_get_pixai_tagger(repo_id: str, revision: str) -> FakeTagger:
+        calls.append((repo_id, revision))
+        return FakeTagger()
+
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_pixai_tagger",
+        fake_get_pixai_tagger,
+    )
+
+    with Session(engine) as session:
+        ensure_default_analysis_profiles(session)
+        session.add(
+            AppSettings(
+                id=1,
+                approval_mode=ApprovalMode.MANUAL,
+                refresh_cron="0 */6 * * *",
+                refresh_enabled=True,
+                download_base_dir="/download",
+                illustration_tagger_enabled=True,
+                illustration_auto_approve_enabled=False,
+                active_analysis_profile_id="pixai-v0-9-onnx",
+            )
+        )
+        item = make_item("pixai-profile")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        result = process_pending_analysis(session)
+
+        analysis = session.exec(select(MediaAnalysis)).one()
+        assert result.analyzed == 1
+        assert calls == [(PIXAI_TAGGER_V0_9_ONNX_REPO_ID, "main")]
+        assert analysis.analysis_profile_id == "pixai-v0-9-onnx"
+        assert analysis.model_name == PIXAI_TAGGER_V0_9_ONNX_REPO_ID
         assert analysis.scoring_version == SCORING_VERSION
 
 

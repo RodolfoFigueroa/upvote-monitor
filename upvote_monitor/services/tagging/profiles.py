@@ -7,6 +7,7 @@ from upvote_monitor.db.models import (
     AnalysisProfile,
     AppSettings,
 )
+from upvote_monitor.services.tagging.pixai_tagger import PIXAI_TAGGER_V0_9_ONNX_REPO_ID
 from upvote_monitor.services.tagging.wd_tagger import (
     WD_EVA02_LARGE_V3_REPO_ID,
     WD_SWINV2_V3_REPO_ID,
@@ -72,6 +73,18 @@ BUILT_IN_ANALYSIS_PROFILES = (
         general_tag_display_threshold=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
         character_tag_display_threshold=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
         auto_approve_threshold=0.92,
+    ),
+    BuiltInAnalysisProfile(
+        id="pixai-v0-9-onnx",
+        name="PixAI Tagger v0.9 ONNX",
+        model_name=PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
+        model_version="main",
+        scoring_version=SCORING_VERSION,
+        general_tag_storage_threshold=0.30,
+        character_tag_storage_threshold=0.85,
+        general_tag_display_threshold=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+        character_tag_display_threshold=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
+        auto_approve_threshold=0.97,
     ),
 )
 

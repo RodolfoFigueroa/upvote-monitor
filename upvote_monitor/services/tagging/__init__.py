@@ -9,6 +9,12 @@ from upvote_monitor.services.tagging.profiles import (
     ensure_default_analysis_profiles,
     list_analysis_profiles,
 )
+from upvote_monitor.services.tagging.pixai_tagger import (
+    PIXAI_COMPATIBLE_MODEL_REPOS,
+    PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
+    PixAITagger,
+    get_pixai_tagger,
+)
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import (
     DEFAULT_MODEL_REPO_ID,
@@ -24,6 +30,9 @@ __all__ = [
     "DEFAULT_MODEL_REPO_ID",
     "AnalysisBatchResult",
     "BUILT_IN_ANALYSIS_PROFILES",
+    "PIXAI_COMPATIBLE_MODEL_REPOS",
+    "PIXAI_TAGGER_V0_9_ONNX_REPO_ID",
+    "PixAITagger",
     "SCORING_VERSION",
     "WD_COMPATIBLE_MODEL_REPOS",
     "WD_EVA02_LARGE_V3_REPO_ID",
@@ -33,6 +42,7 @@ __all__ = [
     "WD_VIT_LARGE_V3_REPO_ID",
     "active_analysis_profile",
     "ensure_default_analysis_profiles",
+    "get_pixai_tagger",
     "list_analysis_profiles",
     "process_pending_analysis",
     "score_illustration",
