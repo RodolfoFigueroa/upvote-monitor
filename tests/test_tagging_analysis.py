@@ -39,7 +39,10 @@ from upvote_monitor.services.tagging.profiles import (
 )
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import (
+    WD_COMPATIBLE_MODEL_REPOS,
     WD_EVA02_LARGE_V3_REPO_ID,
+    WD_SWINV2_V3_REPO_ID,
+    WD_VIT_LARGE_V3_REPO_ID,
     WDTaggerResult,
     get_wd_tagger,
 )
@@ -195,16 +198,70 @@ def test_default_settings_use_swinv2_profile() -> None:
     assert settings.active_analysis_profile_id == DEFAULT_ANALYSIS_PROFILE_ID
 
 
-def test_default_analysis_profiles_include_eva02(engine: Engine) -> None:
+def test_default_analysis_profiles_include_best_smilingwolf_v3_models(
+    engine: Engine,
+) -> None:
     with Session(engine) as session:
         ensure_default_analysis_profiles(session)
 
         profiles = {
-            profile.id: profile for profile in session.exec(select(AnalysisProfile)).all()
+            profile.id: profile
+            for profile in session.exec(select(AnalysisProfile)).all()
         }
         assert {profile.id for profile in BUILT_IN_ANALYSIS_PROFILES} <= set(profiles)
+        assert len(BUILT_IN_ANALYSIS_PROFILES) == 3
+        assert profiles[DEFAULT_ANALYSIS_PROFILE_ID].model_name == WD_SWINV2_V3_REPO_ID
         assert profiles["wd-eva02-large-v3"].model_name == WD_EVA02_LARGE_V3_REPO_ID
         assert profiles["wd-eva02-large-v3"].auto_approve_threshold == 0.92
+        assert profiles["wd-vit-large-v3"].model_name == WD_VIT_LARGE_V3_REPO_ID
+        assert profiles["wd-vit-large-v3"].auto_approve_threshold == 0.92
+        assert "wd-v1-4-vit-v2" not in profiles
+        assert WD_COMPATIBLE_MODEL_REPOS == (
+            WD_SWINV2_V3_REPO_ID,
+            WD_EVA02_LARGE_V3_REPO_ID,
+            WD_VIT_LARGE_V3_REPO_ID,
+        )
+
+
+def test_default_analysis_profiles_disable_deprecated_v2_profile(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        session.add(
+            AnalysisProfile(
+                id="wd-v1-4-vit-v2",
+                name="WD v1.4 ViT v2",
+                model_name="SmilingWolf/wd-v1-4-vit-tagger-v2",
+                model_version="main",
+                scoring_version=SCORING_VERSION,
+                general_tag_storage_threshold=0.01,
+                character_tag_storage_threshold=0.01,
+                general_tag_display_threshold=0.15,
+                character_tag_display_threshold=0.35,
+                auto_approve_threshold=0.90,
+                enabled=True,
+            )
+        )
+        session.add(
+            AppSettings(
+                id=1,
+                approval_mode=ApprovalMode.MANUAL,
+                refresh_cron="0 */6 * * *",
+                refresh_enabled=True,
+                download_base_dir="/download",
+                active_analysis_profile_id="wd-v1-4-vit-v2",
+            )
+        )
+        session.commit()
+
+        ensure_default_analysis_profiles(session)
+
+        deprecated_profile = session.get(AnalysisProfile, "wd-v1-4-vit-v2")
+        settings = session.get(AppSettings, 1)
+        assert deprecated_profile is not None
+        assert deprecated_profile.enabled is False
+        assert settings is not None
+        assert settings.active_analysis_profile_id == DEFAULT_ANALYSIS_PROFILE_ID
 
 
 def test_wd_tagger_rejects_incompatible_model_repo() -> None:
@@ -435,7 +492,9 @@ def test_pending_analysis_skips_non_cacheable_preview(engine: Engine) -> None:
         add_settings(session)
         item = make_item("video-preview")
         session.add(item)
-        session.add(make_attachment(item.id, preview_url="https://example.com/clip.mp4"))
+        session.add(
+            make_attachment(item.id, preview_url="https://example.com/clip.mp4")
+        )
         session.commit()
 
         result = process_pending_analysis(session, FakeTagger())

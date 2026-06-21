@@ -14,6 +14,8 @@ This document summarizes current image tagger options for Upvote Monitor's 2D il
 
 `SmilingWolf/wd-swinv2-tagger-v3` is still the safest default. It is Apache-2.0, ONNX-compatible, widely used, and small enough to plausibly run in a background queue on modest hardware.
 
+Within SmilingWolf's current WD v3 ONNX-compatible family, the best published validation scores are EVA02-Large, ViT-Large, then SwinV2. The v1.4/v2 models use older Danbooru coverage and their published F1 numbers are not directly comparable to v3 because the v3 cards switched to Macro-F1.
+
 The most interesting newer alternative is `pixai-labs/pixai-tagger-v0.9`, especially through the `deepghs/pixai-tagger-v0.9-onnx` export. It has newer Danbooru coverage and stronger character/tag recall, but it is significantly heavier.
 
 `Camais03/camie-tagger-v2` is technically compelling. `fancyfeast/joytag` is lightweight enough to benchmark. `lodestones/taggerine` is powerful but too large for the default self-hosted path.
@@ -23,7 +25,8 @@ The most interesting newer alternative is `pixai-labs/pixai-tagger-v0.9`, especi
 | Model | License | Runtime / Files | Size / Cost | Notes | Fit |
 | --- | --- | --- | --- | --- | --- |
 | [`SmilingWolf/wd-swinv2-tagger-v3`](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | 98M params | Supports ratings, characters, and general tags. Trained on Danbooru through 2024-02. Requires `onnxruntime >= 1.17.0`. | Best default |
-| [`SmilingWolf/wd-eva02-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Stronger model in the same WD v3 family, but much heavier than SwinV2. | Optional quality mode |
+| [`SmilingWolf/wd-eva02-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Strongest published WD v3 validation score, but much heavier than SwinV2. | Best quality mode |
+| [`SmilingWolf/wd-vit-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-large-tagger-v3) | Apache-2.0 | ONNX, safetensors, `timm` | ~0.3B params | Second-best published WD v3 validation score. Similar file size to EVA02-Large. | Alternate quality mode |
 | [`pixai-labs/pixai-tagger-v0.9`](https://huggingface.co/pixai-labs/pixai-tagger-v0.9) | Apache-2.0 | PyTorch checkpoint, gated base repo | ~1.27 GB checkpoint | Newer Danbooru snapshot, about 13.5k tags, recall-oriented, strong character coverage. | High-quality candidate |
 | [`deepghs/pixai-tagger-v0.9-onnx`](https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx) | Apache-2.0 | ONNX | 317.9M params, 448x448 input | ONNX export of PixAI Tagger. Includes 9,741 general tags and 3,720 character tags. Recommended thresholds: general `0.3`, character `0.85`. | Best PixAI route |
 | [`Camais03/camie-tagger-v2`](https://huggingface.co/Camais03/camie-tagger-v2) | GPL-3.0 | ONNX, safetensors | 143M params reported | 70,527 possible tags, trained on Danbooru 2024 data, strong reported character/copyright/rating performance. | Benchmark only (GPL license is acceptable) |
@@ -37,10 +40,11 @@ Use a pluggable tagger backend with this default order:
 
 1. Default: `SmilingWolf/wd-swinv2-tagger-v3`
 2. Optional high-quality WD-compatible profile: `SmilingWolf/wd-eva02-large-tagger-v3`
-3. Optional high-quality backend: `deepghs/pixai-tagger-v0.9-onnx`
-4. Experimental backends: `fancyfeast/joytag`, `Camais03/camie-tagger-v2`
-5. Power-user backend: `lodestones/taggerine`
-6. Legacy fallback: DeepDanbooru ONNX ports
+3. Optional alternate high-quality WD-compatible profile: `SmilingWolf/wd-vit-large-tagger-v3`
+4. Optional high-quality backend: `deepghs/pixai-tagger-v0.9-onnx`
+5. Experimental backends: `fancyfeast/joytag`, `Camais03/camie-tagger-v2`
+6. Power-user backend: `lodestones/taggerine`
+7. Legacy fallback: DeepDanbooru ONNX ports
 
 The app should store the selected model name/version with every analysis result. This matters because tag scores are not comparable across models.
 
@@ -48,6 +52,10 @@ Implemented WD-compatible profiles:
 
 - `SmilingWolf/wd-swinv2-tagger-v3`
 - `SmilingWolf/wd-eva02-large-tagger-v3`
+- `SmilingWolf/wd-vit-large-tagger-v3`
+
+Deprecated built-in profile:
+
 - `SmilingWolf/wd-v1-4-vit-tagger-v2`
 
 The current WD backend expects Hugging Face repos with `model.onnx` and `selected_tags.csv` using WD-style tag categories. PixAI, Camie, JoyTag, Taggerine, and DeepDanbooru entries require separate backend adapters rather than only new profile rows.
@@ -113,6 +121,7 @@ Keep raw tag probabilities for future recalibration. The first scoring layer can
 
 - [`SmilingWolf/wd-swinv2-tagger-v3`](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3)
 - [`SmilingWolf/wd-eva02-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3)
+- [`SmilingWolf/wd-vit-large-tagger-v3`](https://huggingface.co/SmilingWolf/wd-vit-large-tagger-v3)
 - [`pixai-labs/pixai-tagger-v0.9`](https://huggingface.co/pixai-labs/pixai-tagger-v0.9)
 - [`deepghs/pixai-tagger-v0.9-onnx`](https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx)
 - [`Camais03/camie-tagger-v2`](https://huggingface.co/Camais03/camie-tagger-v2)

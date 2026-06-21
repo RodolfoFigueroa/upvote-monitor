@@ -15,7 +15,7 @@ from upvote_monitor.services.tagging.wd_tagger import (
     WD_COMPATIBLE_MODEL_REPOS,
     WD_EVA02_LARGE_V3_REPO_ID,
     WD_SWINV2_V3_REPO_ID,
-    WD_V1_4_VIT_V2_REPO_ID,
+    WD_VIT_LARGE_V3_REPO_ID,
     WDTagger,
     WDTaggerResult,
 )
@@ -30,7 +30,7 @@ __all__ = [
     "WD_SWINV2_V3_REPO_ID",
     "WDTagger",
     "WDTaggerResult",
-    "WD_V1_4_VIT_V2_REPO_ID",
+    "WD_VIT_LARGE_V3_REPO_ID",
     "active_analysis_profile",
     "ensure_default_analysis_profiles",
     "list_analysis_profiles",

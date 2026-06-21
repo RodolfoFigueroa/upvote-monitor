@@ -10,11 +10,11 @@ from PIL import Image
 
 WD_SWINV2_V3_REPO_ID = "SmilingWolf/wd-swinv2-tagger-v3"
 WD_EVA02_LARGE_V3_REPO_ID = "SmilingWolf/wd-eva02-large-tagger-v3"
-WD_V1_4_VIT_V2_REPO_ID = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+WD_VIT_LARGE_V3_REPO_ID = "SmilingWolf/wd-vit-large-tagger-v3"
 WD_COMPATIBLE_MODEL_REPOS = (
     WD_SWINV2_V3_REPO_ID,
     WD_EVA02_LARGE_V3_REPO_ID,
-    WD_V1_4_VIT_V2_REPO_ID,
+    WD_VIT_LARGE_V3_REPO_ID,
 )
 DEFAULT_MODEL_REPO_ID = WD_SWINV2_V3_REPO_ID
 MODEL_FILENAME = "model.onnx"
