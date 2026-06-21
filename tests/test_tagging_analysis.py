@@ -130,6 +130,8 @@ def add_settings(
     character_storage_threshold: float = 0.01,
     general_display_threshold: float = 0.15,
     character_display_threshold: float = 0.35,
+    app_general_display_threshold: float = 0.15,
+    app_character_display_threshold: float = 0.35,
     profile_id: str = TEST_PROFILE_ID,
 ) -> None:
     session.add(
@@ -156,6 +158,8 @@ def add_settings(
             illustration_tagger_enabled=tagger_enabled,
             illustration_auto_approve_enabled=auto_approve_enabled,
             active_analysis_profile_id=profile_id,
+            general_tag_display_threshold=app_general_display_threshold,
+            character_tag_display_threshold=app_character_display_threshold,
         )
     )
 
@@ -306,8 +310,10 @@ def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
             auto_approve_enabled=False,
             general_storage_threshold=0.01,
             character_storage_threshold=0.01,
-            general_display_threshold=0.9,
-            character_display_threshold=0.9,
+            general_display_threshold=0.0,
+            character_display_threshold=0.0,
+            app_general_display_threshold=0.9,
+            app_character_display_threshold=0.5,
         )
         item = make_item("tag-threshold")
         session.add(item)
@@ -322,10 +328,12 @@ def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
                     general_tags={
                         "manga": 0.94,
                         "solo": 0.86,
+                        "mid_general": 0.6,
                         "low_general": 0.1,
                     },
                     character_tags={
                         "hatsune_miku": 0.91,
+                        "mid_character": 0.6,
                         "low_character": 0.2,
                     },
                 )
@@ -338,9 +346,12 @@ def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
         assert "low_general" in analysis.general_tags_json
         assert "low_character" in analysis.character_tags_json
         assert detail.media[0].analysis.general_tags == {"manga": 0.94}
-        assert detail.media[0].analysis.character_tags == {"hatsune_miku": 0.91}
-        assert detail.media[0].analysis.stored_general_tag_count == 3
-        assert detail.media[0].analysis.stored_character_tag_count == 2
+        assert detail.media[0].analysis.character_tags == {
+            "hatsune_miku": 0.91,
+            "mid_character": 0.6,
+        }
+        assert detail.media[0].analysis.stored_general_tag_count == 4
+        assert detail.media[0].analysis.stored_character_tag_count == 3
 
 
 def test_item_detail_uses_active_profile_and_preserves_other_analyses(

@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from upvote_monitor.db.models import (
-    AnalysisProfile,
+    DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
+    DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+    AppSettings,
     MediaAnalysis,
     MediaAttachment,
     ReviewItem,
@@ -27,10 +29,6 @@ from upvote_monitor.services.tagging.analysis import (
     get_attachment_analysis,
     get_attachment_analyses,
     get_item_analysis_summary,
-)
-from upvote_monitor.services.tagging.profiles import (
-    DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
-    DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
 )
 
 
@@ -106,7 +104,7 @@ class MediaAnalysisResponse(BaseModel):
         analysis: MediaAnalysis,
         session: Session,
     ) -> "MediaAnalysisResponse":
-        profile = session.get(AnalysisProfile, analysis.analysis_profile_id)
+        general_threshold, character_threshold = _tag_display_thresholds(session)
         general_tags = _decode_scores(analysis.general_tags_json)
         character_tags = _decode_scores(analysis.character_tags_json)
         return cls(
@@ -118,19 +116,11 @@ class MediaAnalysisResponse(BaseModel):
             illustration_score=analysis.illustration_score,
             general_tags=_filter_scores(
                 general_tags,
-                threshold=(
-                    profile.general_tag_display_threshold
-                    if profile is not None
-                    else DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD
-                ),
+                threshold=general_threshold,
             ),
             character_tags=_filter_scores(
                 character_tags,
-                threshold=(
-                    profile.character_tag_display_threshold
-                    if profile is not None
-                    else DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD
-                ),
+                threshold=character_threshold,
             ),
             ratings=_decode_scores(analysis.ratings_json),
             stored_general_tag_count=len(general_tags),
@@ -359,6 +349,19 @@ def _decode_scores(value: str) -> dict[str, float]:
         if isinstance(key, str) and isinstance(score, int | float):
             result[key] = float(score)
     return result
+
+
+def _tag_display_thresholds(session: Session) -> tuple[float, float]:
+    settings = session.get(AppSettings, 1)
+    if settings is None:
+        return (
+            DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+            DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
+        )
+    return (
+        settings.general_tag_display_threshold,
+        settings.character_tag_display_threshold,
+    )
 
 
 def _filter_scores(

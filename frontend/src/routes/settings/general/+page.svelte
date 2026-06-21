@@ -12,9 +12,6 @@
     refresh_cron: string;
     refresh_enabled: boolean;
     download_base_dir: string;
-    illustration_tagger_enabled: boolean;
-    illustration_auto_approve_enabled: boolean;
-    active_analysis_profile_id: string;
   };
 
   const defaultDraft: GeneralDraft = {
@@ -22,9 +19,6 @@
     refresh_cron: '0 */6 * * *',
     refresh_enabled: true,
     download_base_dir: '/data/downloads',
-    illustration_tagger_enabled: false,
-    illustration_auto_approve_enabled: false,
-    active_analysis_profile_id: 'wd-swinv2-v3-default',
   };
 
   let settings = $state<SettingsResponse | null>(null);
@@ -36,21 +30,12 @@
   let message = $state<string | null>(null);
 
   let dirty = $derived(savedDraft !== null && !sameGeneralDraft(draft, savedDraft));
-  const activeProfile = $derived(
-    settings?.analysis_profiles.find(
-      (profile) => profile.id === draft.active_analysis_profile_id
-    ) ?? null
-  );
-
   function toGeneralDraft(value: SettingsResponse): GeneralDraft {
     return {
       approval_mode: value.approval_mode,
       refresh_cron: value.refresh_cron,
       refresh_enabled: value.refresh_enabled,
       download_base_dir: value.download_base_dir,
-      illustration_tagger_enabled: value.illustration_tagger_enabled,
-      illustration_auto_approve_enabled: value.illustration_auto_approve_enabled,
-      active_analysis_profile_id: value.active_analysis_profile_id,
     };
   }
 
@@ -59,10 +44,7 @@
       a.approval_mode === b.approval_mode &&
       a.refresh_cron === b.refresh_cron &&
       a.refresh_enabled === b.refresh_enabled &&
-      a.download_base_dir === b.download_base_dir &&
-      a.illustration_tagger_enabled === b.illustration_tagger_enabled &&
-      a.illustration_auto_approve_enabled === b.illustration_auto_approve_enabled &&
-      a.active_analysis_profile_id === b.active_analysis_profile_id
+      a.download_base_dir === b.download_base_dir
     );
   }
 
@@ -97,9 +79,6 @@
           refresh_cron: draft.refresh_cron,
           refresh_enabled: draft.refresh_enabled,
           download_base_dir: draft.download_base_dir,
-          illustration_tagger_enabled: draft.illustration_tagger_enabled,
-          illustration_auto_approve_enabled: draft.illustration_auto_approve_enabled,
-          active_analysis_profile_id: draft.active_analysis_profile_id,
         })
       );
       message = 'Settings saved';
@@ -158,48 +137,6 @@
           <input type="checkbox" bind:checked={draft.refresh_enabled} />
           Refresh enabled
         </label>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>Illustration Tagger</h2>
-        <span>{dirty ? 'unsaved changes' : 'saved'}</span>
-      </div>
-      <div class="form-grid">
-        <label class="toggle-line">
-          <input type="checkbox" bind:checked={draft.illustration_tagger_enabled} />
-          Tag illustrations
-        </label>
-        <label class="toggle-line">
-          <input
-            type="checkbox"
-            bind:checked={draft.illustration_auto_approve_enabled}
-            disabled={!draft.illustration_tagger_enabled}
-          />
-          Auto-approve matching images
-        </label>
-        <div class="field">
-          <span>Analysis profile</span>
-          <select
-            class="select"
-            bind:value={draft.active_analysis_profile_id}
-          >
-            {#each settings?.analysis_profiles.filter((profile) => profile.enabled) ?? [] as profile}
-              <option value={profile.id}>{profile.name}</option>
-            {/each}
-          </select>
-        </div>
-        {#if activeProfile}
-          <div class="notice" style="grid-column: 1 / -1; align-items: flex-start;">
-            <div>
-              <strong>{activeProfile.model_name}</strong>
-              <p>
-                {activeProfile.model_version} · {activeProfile.scoring_version} · approve {Math.round(activeProfile.auto_approve_threshold * 100)}% · general show {Math.round(activeProfile.general_tag_display_threshold * 100)}% · character show {Math.round(activeProfile.character_tag_display_threshold * 100)}%
-              </p>
-            </div>
-          </div>
-        {/if}
       </div>
     </section>
 

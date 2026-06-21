@@ -7,6 +7,7 @@
     MessageCircle,
     RefreshCw,
     Settings,
+    Tags,
   } from '@lucide/svelte';
 
   let { children }: { children: Snippet } = $props();
@@ -35,6 +36,15 @@
     >
       <Settings size={16} />
       <span>General</span>
+    </a>
+    <a
+      class="settings-tab"
+      href="/settings/tagger"
+      data-active={isActive('/settings/tagger')}
+      title="Tagger"
+    >
+      <Tags size={16} />
+      <span>Tagger</span>
     </a>
     <a
       class="settings-tab"

@@ -179,6 +179,8 @@ class SettingsResponse(BaseModel):
     illustration_tagger_enabled: bool
     illustration_auto_approve_enabled: bool
     active_analysis_profile_id: str
+    general_tag_display_threshold: float
+    character_tag_display_threshold: float
     analysis_profiles: list[AnalysisProfileResponse]
     sources: SourceSettingsResponse
 
@@ -201,6 +203,8 @@ class SettingsResponse(BaseModel):
                 settings.illustration_auto_approve_enabled
             ),
             active_analysis_profile_id=settings.active_analysis_profile_id,
+            general_tag_display_threshold=settings.general_tag_display_threshold,
+            character_tag_display_threshold=settings.character_tag_display_threshold,
             analysis_profiles=[
                 AnalysisProfileResponse.from_db(profile)
                 for profile in analysis_profiles
@@ -282,6 +286,12 @@ class SettingsUpdate(BaseModel):
     illustration_tagger_enabled: bool | None = None
     illustration_auto_approve_enabled: bool | None = None
     active_analysis_profile_id: str | None = None
+    general_tag_display_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    character_tag_display_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
     sources: SourceSettingsUpdate | None = None
 
     @field_validator("refresh_cron")

@@ -17,6 +17,8 @@ from upvote_monitor.enums import (
 )
 
 DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-default"
+DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD = 0.15
+DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD = 0.35
 
 
 def utc_now() -> datetime:
@@ -138,6 +140,12 @@ class AppSettings(SQLModel, table=True):
     illustration_tagger_enabled: bool = Field(default=False)
     illustration_auto_approve_enabled: bool = Field(default=False)
     active_analysis_profile_id: str = Field(default=DEFAULT_ANALYSIS_PROFILE_ID)
+    general_tag_display_threshold: float = Field(
+        default=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD
+    )
+    character_tag_display_threshold: float = Field(
+        default=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD
+    )
 
 
 class SourceSettings(SQLModel, table=True):

@@ -157,6 +157,8 @@ export interface SettingsResponse {
   illustration_tagger_enabled: boolean;
   illustration_auto_approve_enabled: boolean;
   active_analysis_profile_id: string;
+  general_tag_display_threshold: number;
+  character_tag_display_threshold: number;
   analysis_profiles: AnalysisProfile[];
   sources: SourceSettingsResponse;
 }
@@ -169,6 +171,8 @@ export interface SettingsUpdate {
   illustration_tagger_enabled?: boolean;
   illustration_auto_approve_enabled?: boolean;
   active_analysis_profile_id?: string;
+  general_tag_display_threshold?: number;
+  character_tag_display_threshold?: number;
   sources?: SourceSettingsUpdate;
 }
 

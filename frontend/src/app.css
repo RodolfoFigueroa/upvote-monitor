@@ -412,6 +412,15 @@
     font-size: 12px;
   }
 
+  .panel-copy {
+    margin: 0;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text-muted);
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
   .queue-list {
     display: grid;
     gap: 0;
@@ -763,6 +772,35 @@
   .input:focus,
   .select:focus {
     border-color: rgb(114 167 255 / 70%);
+  }
+
+  .threshold-field {
+    min-width: 0;
+  }
+
+  .threshold-control {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 76px auto;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .range-input {
+    width: 100%;
+    min-width: 0;
+    accent-color: var(--teal);
+  }
+
+  .threshold-number {
+    width: 76px;
+    text-align: right;
+  }
+
+  .threshold-unit {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 720;
   }
 
   .input[data-invalid='true'],
