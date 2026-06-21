@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlmodel import Session, col, select
 from yt_dlp import YoutubeDL
 
@@ -60,11 +61,34 @@ def _broadcast_item_updated(item: ReviewItem) -> None:
     )
 
 
-def claim_item_for_download(session: Session, item_id: str) -> ReviewItem | None:
+def _download_ready_filter(now: datetime):
+    return or_(
+        col(ReviewItem.download_ready_at).is_(None),
+        col(ReviewItem.download_ready_at) <= now,
+    )
+
+
+def _seconds_until_download_ready(item: ReviewItem) -> float:
+    if item.download_ready_at is None:
+        return 0
+    now = (
+        datetime.now(item.download_ready_at.tzinfo)
+        if item.download_ready_at.tzinfo is not None
+        else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    return max((item.download_ready_at - now).total_seconds(), 0)
+
+
+def claim_item_for_download(
+    session: Session,
+    item_id: str,
+    *,
+    ignore_ready_at: bool = False,
+) -> ReviewItem | None:
     if item_has_under_review_media(session, item_id):
         return None
 
-    result: Any = session.exec(
+    statement = (
         update(ReviewItem)
         .where(col(ReviewItem.id) == item_id)
         .where(col(ReviewItem.approval_status) == ApprovalStatus.APPROVED)
@@ -73,7 +97,18 @@ def claim_item_for_download(session: Session, item_id: str) -> ReviewItem | None
                 [DownloadStatus.PENDING, DownloadStatus.FAILED]
             )
         )
-        .values(download_status=DownloadStatus.IN_PROGRESS, download_error=None)
+    )
+    if not ignore_ready_at:
+        statement = statement.where(
+            _download_ready_filter(datetime.now(timezone.utc).replace(tzinfo=None))
+        )
+
+    result: Any = session.exec(
+        statement.values(
+            download_status=DownloadStatus.IN_PROGRESS,
+            download_ready_at=None,
+            download_error=None,
+        ).execution_options(synchronize_session=False)
     )
     session.commit()
 
@@ -89,12 +124,25 @@ def claim_item_for_download(session: Session, item_id: str) -> ReviewItem | None
     return item
 
 
-def run_download_background(item_id: str) -> None:
+def _wait_until_download_ready(item_id: str) -> None:
+    with Session(engine) as session:
+        item = session.get(ReviewItem, item_id)
+        if item is None:
+            return
+        delay_seconds = _seconds_until_download_ready(item)
+    if delay_seconds > 0:
+        time.sleep(delay_seconds)
+
+
+def run_download_background(item_id: str, *, ignore_ready_at: bool = False) -> None:
+    if not ignore_ready_at:
+        _wait_until_download_ready(item_id)
+
     with Session(engine) as session:
         settings = session.get(AppSettings, 1)
         if settings is None:
             return
-        item = claim_item_for_download(session, item_id)
+        item = claim_item_for_download(session, item_id, ignore_ready_at=ignore_ready_at)
         if item is None:
             return
         _download_claimed_item(session, item, settings.download_base_dir)
@@ -153,7 +201,11 @@ def _download_attachment_to_path(
     raise ValueError(f"Unsupported download strategy: {attachment.download_strategy}")
 
 
-def process_pending_downloads(session: Session) -> DownloadBatchResult:
+def process_pending_downloads(
+    session: Session,
+    *,
+    wait_until_ready: bool = True,
+) -> DownloadBatchResult:
     settings = session.get(AppSettings, 1)
     if settings is None:
         raise RuntimeError("App settings not initialized")
@@ -172,6 +224,13 @@ def process_pending_downloads(session: Session) -> DownloadBatchResult:
 
     for item_id in items:
         item = claim_item_for_download(session, item_id)
+        if item is None and wait_until_ready:
+            pending_item = session.get(ReviewItem, item_id)
+            if pending_item is not None:
+                delay_seconds = _seconds_until_download_ready(pending_item)
+                if delay_seconds > 0:
+                    time.sleep(delay_seconds)
+                    item = claim_item_for_download(session, item_id)
         if item is None:
             continue
 

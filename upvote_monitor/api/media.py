@@ -22,7 +22,11 @@ from upvote_monitor.schemas.items import (
 )
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import run_download_background
-from upvote_monitor.services.media_workflow import set_media_decision
+from upvote_monitor.services.media_workflow import (
+    ReopenMediaConflictError,
+    reopen_media_for_review,
+    set_media_decision,
+)
 from upvote_monitor.services.refresh_status import broadcast_review_queue_changed
 from upvote_monitor.services.tagging.analysis import (
     TaggerUnavailableError,
@@ -134,6 +138,8 @@ def list_media(
     approval_status: str | None = Query(default=None),
     illustration_label: str | None = Query(default=None),
     download_status: str | None = Query(default=None),
+    item_id: str | None = None,
+    media_id: int | None = None,
     source: list[str] | None = Query(default=None),
     community: str | None = Query(default=None),
     author: str | None = Query(default=None),
@@ -163,6 +169,14 @@ def list_media(
     if label is not None:
         query = query.where(MediaAttachment.illustration_label == label)
         count_query = count_query.where(MediaAttachment.illustration_label == label)
+
+    if item_id is not None:
+        query = query.where(MediaAttachment.item_id == item_id)
+        count_query = count_query.where(MediaAttachment.item_id == item_id)
+
+    if media_id is not None:
+        query = query.where(MediaAttachment.id == media_id)
+        count_query = count_query.where(MediaAttachment.id == media_id)
 
     if download_status is not None:
         try:
@@ -253,6 +267,11 @@ def update_media(
     attachment, item = _get_media_or_404(session, media_id)
     approval_status = _parse_approval_status(body.approval_status)
     illustration_label = _parse_illustration_label(body.illustration_label)
+    if approval_status == ApprovalStatus.UNDER_REVIEW:
+        raise HTTPException(
+            status_code=400,
+            detail="Use the reopen endpoint to return media to review",
+        )
     changed_approval = approval_status is not None
 
     updated_item = set_media_decision(
@@ -282,9 +301,32 @@ def update_media(
     return MediaItemResponse.from_db(attachment, item, session)
 
 
+@router.post("/{media_id}/reopen", response_model=MediaItemResponse)
+def reopen_media(
+    media_id: int,
+    session: Session = Depends(get_db_session),
+) -> MediaItemResponse:
+    attachment, item = _get_media_or_404(session, media_id)
+    try:
+        updated_item = reopen_media_for_review(session, attachment)
+    except ReopenMediaConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    session.commit()
+    session.refresh(attachment)
+    item = updated_item or item
+    session.refresh(item)
+    broadcast_review_queue_changed(
+        media_id=attachment.id,
+        reason="media_reopened",
+    )
+    return MediaItemResponse.from_db(attachment, item, session)
+
+
 @router.post("/{media_id}/analyze", response_model=MediaItemResponse)
 def analyze_media(
     media_id: int,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> MediaItemResponse:
     attachment, item = _get_media_or_404(session, media_id)
@@ -295,4 +337,9 @@ def analyze_media(
 
     session.refresh(attachment)
     session.refresh(item)
+    if (
+        item.approval_status == ApprovalStatus.APPROVED
+        and item.download_status in (DownloadStatus.PENDING, DownloadStatus.FAILED)
+    ):
+        background_tasks.add_task(run_download_background, item.id)
     return MediaItemResponse.from_db(attachment, item, session)

@@ -287,6 +287,8 @@ export interface MediaListParams {
   approval_status?: ApprovalStatus;
   illustration_label?: IllustrationLabel;
   download_status?: DownloadStatus;
+  item_id?: string;
+  media_id?: number;
   source?: string | string[];
   community?: string;
   author?: string;

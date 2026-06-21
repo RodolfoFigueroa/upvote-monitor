@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -469,8 +470,8 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
         session.add(make_attachment(item.id))
         session.commit()
 
-        first_detail = analyze_item_endpoint("manual-tag", session)
-        second_detail = analyze_item_endpoint("manual-tag", session)
+        first_detail = analyze_item_endpoint("manual-tag", BackgroundTasks(), session)
+        second_detail = analyze_item_endpoint("manual-tag", BackgroundTasks(), session)
 
         analyses = session.exec(select(MediaAnalysis)).all()
         item = session.get(ReviewItem, "manual-tag")

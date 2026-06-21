@@ -42,6 +42,7 @@ class ReviewItem(SQLModel, table=True):
     created_at: datetime
     approval_status: ApprovalStatus
     download_status: DownloadStatus = Field(default=DownloadStatus.PENDING)
+    download_ready_at: datetime | None = Field(default=None, index=True)
     download_error: str | None = None
     raw_data_json: str = Field(sa_column=Column(Text, nullable=False))
     media_count: int
@@ -76,6 +77,7 @@ class MediaAttachment(SQLModel, table=True):
         default=ApprovalStatus.UNDER_REVIEW,
         index=True,
     )
+    decided_at: datetime | None = Field(default=None, index=True)
     illustration_label: IllustrationLabel = Field(
         default=IllustrationLabel.UNLABELED,
         index=True,

@@ -26,7 +26,12 @@ from upvote_monitor.services.preview_cache import (
     get_or_fetch_cached_preview,
     preview_media_type,
 )
-from upvote_monitor.services.media_workflow import set_item_media_approval
+from upvote_monitor.services.media_workflow import (
+    ReopenMediaConflictError,
+    reopen_rejected_media_for_item,
+    set_item_media_approval,
+)
+from upvote_monitor.services.refresh_status import broadcast_review_queue_changed
 from upvote_monitor.services.tagging.analysis import (
     TaggerUnavailableError,
     analyze_item,
@@ -140,6 +145,7 @@ def get_item(
 @router.post("/{item_id}/analyze", response_model=ItemDetail)
 def analyze_item_endpoint(
     item_id: str,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_db_session),
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
@@ -149,6 +155,11 @@ def analyze_item_endpoint(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     session.refresh(item)
+    if item.approval_status == ApprovalStatus.APPROVED and item.download_status in (
+        DownloadStatus.PENDING,
+        DownloadStatus.FAILED,
+    ):
+        background_tasks.add_task(run_download_background, item.id)
     return ItemDetail.from_db(item, session)
 
 
@@ -180,6 +191,23 @@ def reject_item(
     return ItemDetail.from_db(item, session)
 
 
+@router.post("/{item_id}/reopen-rejected", response_model=ItemDetail)
+def reopen_rejected_media(
+    item_id: str,
+    session: Session = Depends(get_db_session),
+) -> ItemDetail:
+    item = _get_item_or_404(session, item_id)
+    try:
+        item = reopen_rejected_media_for_item(session, item)
+    except ReopenMediaConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    session.commit()
+    session.refresh(item)
+    broadcast_review_queue_changed(reason="rejected_media_reopened")
+    return ItemDetail.from_db(item, session)
+
+
 @router.post("/{item_id}/retry-download", response_model=ItemDetail)
 def retry_download(
     item_id: str,
@@ -195,7 +223,10 @@ def retry_download(
             detail="Download can only be retried when pending or failed",
         )
 
-    background_tasks.add_task(run_download_background, item_id)
+    item.download_ready_at = None
+    session.add(item)
+    session.commit()
+    background_tasks.add_task(run_download_background, item_id, ignore_ready_at=True)
     return ItemDetail.from_db(item, session)
 
 

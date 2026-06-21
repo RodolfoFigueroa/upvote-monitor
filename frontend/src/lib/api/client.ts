@@ -96,6 +96,8 @@ export const api = {
       request<ItemDetail>(`/api/items/${id}/analyze`, { method: 'POST' }),
     reject: (id: string) =>
       request<ItemDetail>(`/api/items/${id}/reject`, { method: 'POST' }),
+    reopenRejected: (id: string) =>
+      request<ItemDetail>(`/api/items/${id}/reopen-rejected`, { method: 'POST' }),
     retryDownload: (id: string) =>
       request<ItemDetail>(`/api/items/${id}/retry-download`, { method: 'POST' }),
     files: (id: string) => request<ItemFilesResponse>(`/api/items/${id}/files`),
@@ -109,6 +111,8 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(body),
       }),
+    reopen: (id: number) =>
+      request<MediaItem>(`/api/media/${id}/reopen`, { method: 'POST' }),
     analyze: (id: number) =>
       request<MediaItem>(`/api/media/${id}/analyze`, { method: 'POST' }),
   },

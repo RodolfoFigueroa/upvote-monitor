@@ -1,33 +1,24 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import {
-    Check,
     CircleAlert,
     ExternalLink,
     RotateCcw,
     Tags,
-    X,
   } from '@lucide/svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import MediaAnalysisPanel from '$lib/components/MediaAnalysisPanel.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { api } from '$lib/api/client';
-  import { communityLabel, formatDate, isVideoUrl, statusLabel } from '$lib/format';
+  import { communityLabel, formatDate, isVideoUrl } from '$lib/format';
   import { subscribeItemUpdated } from '$lib/sse/store.svelte';
   import type {
-    ApprovalStatus,
     DownloadStatus,
-    IllustrationLabel,
     ItemDetail,
     ItemFile,
     MediaAttachment,
   } from '$lib/types/api';
   import { onMount } from 'svelte';
-
-  const labelOptions: { value: IllustrationLabel; label: string }[] = [
-    { value: 'yes', label: 'Yes' },
-    { value: 'no', label: 'No' },
-    { value: 'unsure', label: 'Unsure' },
-  ];
 
   let item = $state<ItemDetail | null>(null);
   let files = $state<ItemFile[]>([]);
@@ -42,14 +33,16 @@
     item?.approval_status === 'approved' &&
       (item.download_status === 'failed' || item.download_status === 'pending')
   );
+  const rejectedMediaCount = $derived(
+    item?.media.filter((media) => media.approval_status === 'rejected').length ?? 0
+  );
+  const pendingMediaCount = $derived(
+    item?.media.filter((media) => media.approval_status === 'under_review').length ?? 0
+  );
 
   function scorePercent(value: number | null | undefined): string {
     if (value === null || value === undefined) return 'unscored';
     return `${Math.round(value * 100)}%`;
-  }
-
-  function sortedScores(scores: Record<string, number> | undefined): [string, number][] {
-    return Object.entries(scores ?? {}).sort((a, b) => b[1] - a[1]);
   }
 
   function mediaType(media: MediaAttachment): string | undefined {
@@ -67,6 +60,14 @@
 
   function mediaBusy(mediaId: number): boolean {
     return mediaActions[mediaId] !== undefined;
+  }
+
+  function reviewItemHref(): string {
+    return `/?item_id=${encodeURIComponent(itemId)}`;
+  }
+
+  function reviewMediaHref(media: MediaAttachment): string {
+    return `/?media_id=${media.id}`;
   }
 
   async function load(options: { quiet?: boolean } = {}) {
@@ -95,32 +96,6 @@
     }
   }
 
-  async function bulkApprove() {
-    actionLoading = true;
-    errorMessage = null;
-    try {
-      item = await api.items.approve(itemId);
-      files = [];
-    } catch (e) {
-      errorMessage = e instanceof Error ? e.message : 'Approve failed';
-    } finally {
-      actionLoading = false;
-    }
-  }
-
-  async function bulkReject() {
-    actionLoading = true;
-    errorMessage = null;
-    try {
-      item = await api.items.reject(itemId);
-      files = [];
-    } catch (e) {
-      errorMessage = e instanceof Error ? e.message : 'Reject failed';
-    } finally {
-      actionLoading = false;
-    }
-  }
-
   async function retryDownload() {
     actionLoading = true;
     errorMessage = null;
@@ -146,23 +121,6 @@
     }
   }
 
-  async function updateMedia(
-    media: MediaAttachment,
-    body: { approval_status?: ApprovalStatus; illustration_label?: IllustrationLabel },
-  ) {
-    mediaActions = { ...mediaActions, [media.id]: 'updating' };
-    errorMessage = null;
-    try {
-      await api.media.update(media.id, body);
-      await load({ quiet: true });
-    } catch (e) {
-      errorMessage = e instanceof Error ? e.message : 'Media update failed';
-    } finally {
-      const { [media.id]: _, ...rest } = mediaActions;
-      mediaActions = rest;
-    }
-  }
-
   async function analyzeMedia(media: MediaAttachment) {
     mediaActions = { ...mediaActions, [media.id]: 'tagging' };
     errorMessage = null;
@@ -174,6 +132,33 @@
     } finally {
       const { [media.id]: _, ...rest } = mediaActions;
       mediaActions = rest;
+    }
+  }
+
+  async function reopenRejectedMedia(media: MediaAttachment) {
+    mediaActions = { ...mediaActions, [media.id]: 'reopening' };
+    errorMessage = null;
+    try {
+      await api.media.reopen(media.id);
+      await load({ quiet: true });
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : 'Reopen failed';
+    } finally {
+      const { [media.id]: _, ...rest } = mediaActions;
+      mediaActions = rest;
+    }
+  }
+
+  async function reopenRejectedItemMedia() {
+    actionLoading = true;
+    errorMessage = null;
+    try {
+      item = await api.items.reopenRejected(itemId);
+      files = [];
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : 'Reopen failed';
+    } finally {
+      actionLoading = false;
     }
   }
 
@@ -264,14 +249,17 @@
       </div>
     </dl>
     <div class="actions-row settings-actions">
-      <button class="button" data-tone="primary" onclick={bulkApprove} disabled={actionLoading}>
-        <Check size={16} />
-        Keep all
-      </button>
-      <button class="button" data-tone="danger" onclick={bulkReject} disabled={actionLoading}>
-        <X size={16} />
-        Reject all
-      </button>
+      {#if rejectedMediaCount > 0}
+        <button class="button" onclick={reopenRejectedItemMedia} disabled={actionLoading}>
+          <RotateCcw size={16} />
+          Reopen rejected
+        </button>
+      {/if}
+      {#if pendingMediaCount > 0}
+        <a class="button" data-tone="quiet" href={reviewItemHref()}>
+          Review pending
+        </a>
+      {/if}
       {#if canRetry}
         <button class="button" onclick={retryDownload} disabled={actionLoading}>
           <RotateCcw size={16} />
@@ -320,24 +308,21 @@
               <span class="chip">score {scorePercent(media.analysis?.illustration_score)}</span>
             </div>
             <div class="actions-row">
-              <button
-                class="button"
-                data-tone="primary"
-                disabled={mediaBusy(media.id)}
-                onclick={() => updateMedia(media, { approval_status: 'approved' })}
-              >
-                <Check size={16} />
-                Keep
-              </button>
-              <button
-                class="button"
-                data-tone="danger"
-                disabled={mediaBusy(media.id)}
-                onclick={() => updateMedia(media, { approval_status: 'rejected' })}
-              >
-                <X size={16} />
-                Reject
-              </button>
+              {#if media.approval_status === 'rejected'}
+                <button
+                  class="button"
+                  disabled={mediaBusy(media.id)}
+                  onclick={() => reopenRejectedMedia(media)}
+                >
+                  <RotateCcw size={16} />
+                  Reopen
+                </button>
+              {/if}
+              {#if media.approval_status === 'under_review'}
+                <a class="button" data-tone="quiet" href={reviewMediaHref(media)}>
+                  Review
+                </a>
+              {/if}
               <button
                 class="button"
                 data-tone="quiet"
@@ -348,49 +333,11 @@
                 {mediaActions[media.id] === 'tagging' ? 'Tagging' : 'Tag'}
               </button>
             </div>
-            <div class="triage-section">
-              <strong>Illustration label</strong>
-              <div class="segmented-control">
-                {#each labelOptions as option}
-                  <button
-                    class="button"
-                    data-tone={media.illustration_label === option.value ? 'primary' : 'quiet'}
-                    disabled={mediaBusy(media.id)}
-                    onclick={() => updateMedia(media, { illustration_label: option.value })}
-                  >
-                    {option.label}
-                  </button>
-                {/each}
-              </div>
-            </div>
-            {#if sortedScores(media.analysis?.character_tags).length > 0}
-              <div class="tag-group">
-                <strong>Character</strong>
-                <div class="chip-row">
-                  {#each sortedScores(media.analysis?.character_tags).slice(0, 8) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-            {#if sortedScores(media.analysis?.general_tags).length > 0}
-              <div class="tag-group">
-                <strong>General</strong>
-                <div class="chip-row">
-                  {#each sortedScores(media.analysis?.general_tags).slice(0, 12) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
+            <MediaAnalysisPanel analysis={media.analysis} analyses={media.analyses} />
             <div class="detail-grid" style="padding: 0; grid-template-columns: 1fr;">
               <div>
                 <dt>Download URL</dt>
                 <dd><a class="link" href={media.download_url} target="_blank" rel="noreferrer">{media.download_url}</a></dd>
-              </div>
-              <div>
-                <dt>Analysis</dt>
-                <dd>{media.analysis?.model_name ?? 'Not analyzed'} · {media.analysis?.status ?? statusLabel('pending')}</dd>
               </div>
             </div>
           </div>

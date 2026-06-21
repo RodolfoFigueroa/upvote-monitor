@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/stores';
   import {
     Check,
     ChevronDown,
@@ -10,6 +11,7 @@
     X,
   } from '@lucide/svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import MediaAnalysisPanel from '$lib/components/MediaAnalysisPanel.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { api } from '$lib/api/client';
   import { formatRelative, isVideoUrl, statusLabel } from '$lib/format';
@@ -27,6 +29,11 @@
   type SourceOption = {
     value: keyof SourceSettingsResponse;
     label: string;
+  };
+  type DecisionStatus = 'approved' | 'rejected';
+  type UndoNotice = {
+    media: MediaItem;
+    status: DecisionStatus;
   };
 
   const SOURCE_CATALOG: SourceOption[] = [
@@ -58,7 +65,8 @@
   let pendingActions = $state<Record<number, string>>({});
   let draftLabels = $state<Record<number, IllustrationLabel>>({});
   let taggingActions = $state<Record<number, boolean>>({});
-  let showAnalysisDetails = $state(false);
+  let undoNotice = $state<UndoNotice | null>(null);
+  let undoTimer: number | null = null;
   let decidedMediaIds = new Set<number>();
 
   let draftDownloadStatus = $state<DownloadStatus | ''>('');
@@ -75,6 +83,8 @@
   let draftAuthor = $state('');
   let appliedCommunity = $state('');
   let appliedAuthor = $state('');
+  let routeItemId = $state<string | null>(null);
+  let routeMediaId = $state<number | null>(null);
 
   const selectedMedia = $derived(
     selectedId ? media.find((item) => item.id === selectedId) ?? null : null
@@ -106,7 +116,9 @@
         appliedIllustrationLabel ||
         appliedSelectedSources.length > 0 ||
         appliedCommunity ||
-        appliedAuthor
+        appliedAuthor ||
+        routeItemId ||
+        routeMediaId
     )
   );
   const hasDraftFilters = $derived(
@@ -149,10 +161,6 @@
   function scorePercent(value: number | null | undefined): string {
     if (value === null || value === undefined) return 'unscored';
     return `${Math.round(value * 100)}%`;
-  }
-
-  function sortedScores(scores: Record<string, number> | undefined): [string, number][] {
-    return Object.entries(scores ?? {}).sort((a, b) => b[1] - a[1]);
   }
 
   function isIllustrationLabel(value: unknown): value is IllustrationLabel {
@@ -204,6 +212,65 @@
     saveDraftLabels(rest);
   }
 
+  function loadRouteFilters() {
+    const mediaParam = $page.url.searchParams.get('media_id');
+    const parsedMediaId = mediaParam === null ? Number.NaN : Number(mediaParam);
+    routeMediaId = Number.isInteger(parsedMediaId) ? parsedMediaId : null;
+    routeItemId = $page.url.searchParams.get('item_id') || null;
+  }
+
+  function clearRouteFilters() {
+    routeItemId = null;
+    routeMediaId = null;
+    if (typeof window !== 'undefined' && window.location.search) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }
+
+  function clearUndoTimer() {
+    if (undoTimer !== null) {
+      clearTimeout(undoTimer);
+      undoTimer = null;
+    }
+  }
+
+  function dismissUndoNotice() {
+    clearUndoTimer();
+    undoNotice = null;
+  }
+
+  function showUndoNotice(mediaItem: MediaItem, status: DecisionStatus) {
+    dismissUndoNotice();
+    undoNotice = { media: mediaItem, status };
+    if (typeof window !== 'undefined') {
+      undoTimer = window.setTimeout(() => {
+        undoNotice = null;
+        undoTimer = null;
+      }, 8000);
+    }
+  }
+
+  async function undoLastDecision() {
+    const notice = undoNotice;
+    if (notice === null) return;
+
+    dismissUndoNotice();
+    actionError = null;
+    pendingActions = { ...pendingActions, [notice.media.id]: 'undo' };
+
+    try {
+      await api.media.reopen(notice.media.id);
+      decidedMediaIds = new Set(decidedMediaIds);
+      decidedMediaIds.delete(notice.media.id);
+      await load({ quiet: true });
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : 'Undo failed';
+    } finally {
+      const { [notice.media.id]: _, ...rest } = pendingActions;
+      pendingActions = rest;
+    }
+  }
+
   function localLabel(item: MediaItem): IllustrationLabel {
     return draftLabels[item.id] ?? item.illustration_label;
   }
@@ -244,6 +311,8 @@
       approval_status: 'under_review' as const,
       illustration_label: appliedIllustrationLabel || undefined,
       download_status: appliedDownloadStatus || undefined,
+      item_id: routeItemId ?? undefined,
+      media_id: routeMediaId ?? undefined,
       source: appliedSelectedSources.length > 0 ? appliedSelectedSources : undefined,
       community: appliedCommunity.trim() || undefined,
       author: appliedAuthor.trim() || undefined,
@@ -349,6 +418,7 @@
     appliedSelectedSources = [];
     appliedCommunity = '';
     appliedAuthor = '';
+    clearRouteFilters();
     sourceMenuOpen = false;
     void load();
   }
@@ -405,7 +475,6 @@
 
   function selectMedia(mediaId: number) {
     selectedId = mediaId;
-    showAnalysisDetails = false;
   }
 
   function itemBusy(mediaId: number): boolean {
@@ -433,7 +502,6 @@
     promoteFromBuffer();
     if (selectedId === mediaId) {
       selectedId = media[index]?.id ?? media[index - 1]?.id ?? null;
-      showAnalysisDetails = false;
     }
   }
 
@@ -503,6 +571,10 @@
         approval_status: status,
         illustration_label: persistedLabel,
       });
+      showUndoNotice(
+        { ...target, approval_status: status, illustration_label: persistedLabel },
+        status
+      );
       clearDraftLabel(mediaId);
       if (media.length === 0 && mediaBuffer.length === 0) {
         void load({ quiet: true });
@@ -618,6 +690,7 @@
 
   onMount(() => {
     void (async () => {
+      loadRouteFilters();
       draftLabels = loadDraftLabels();
       await loadSourceOptions();
       await load();
@@ -628,6 +701,7 @@
     return () => {
       document.removeEventListener('click', closeSourceMenuOnOutsideClick);
       document.removeEventListener('keydown', handleKeyboard);
+      clearUndoTimer();
       unsubscribeReviewQueueChanged();
     };
   });
@@ -743,6 +817,8 @@
     <div class="chip-row">
       {#if appliedDownloadStatus}<span class="chip">download: {statusLabel(appliedDownloadStatus)}</span>{/if}
       {#if appliedIllustrationLabel}<span class="chip">illustration: {statusLabel(appliedIllustrationLabel)}</span>{/if}
+      {#if routeMediaId}<span class="chip">media: {routeMediaId}</span>{/if}
+      {#if routeItemId}<span class="chip">item: {routeItemId}</span>{/if}
       {#if appliedSelectedSources.length > 0}
         <span class="chip">source: {appliedSelectedSourceLabels.join(', ')}</span>
       {/if}
@@ -755,6 +831,17 @@
     <div class="notice" data-tone="danger">
       <CircleAlert size={16} />
       {actionError}
+    </div>
+  {/if}
+
+  {#if undoNotice}
+    <div class="notice" data-tone="positive">
+      <Check size={16} />
+      <span>{statusLabel(undoNotice.status)} media {undoNotice.media.sort_index + 1}</span>
+      <button class="button" data-tone="quiet" onclick={undoLastDecision}>
+        <RefreshCw size={16} />
+        Undo
+      </button>
     </div>
   {/if}
 
@@ -922,49 +1009,10 @@
               </div>
             </div>
 
-            <div class="triage-section">
-              <strong>Analysis</strong>
-              <div class="notice" style="align-items: flex-start;">
-                <Tags size={16} />
-                <div>
-                  <strong>Illustration {scorePercent(selectedMedia.analysis?.illustration_score)}</strong>
-                  <p>{selectedMedia.analysis?.status ?? 'not analyzed'}</p>
-                </div>
-              </div>
-            </div>
-
-            {#if sortedScores(selectedMedia.analysis?.ratings).length > 0}
-              <div class="tag-group">
-                <strong>Ratings</strong>
-                <div class="chip-row">
-                  {#each sortedScores(selectedMedia.analysis?.ratings) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if sortedScores(selectedMedia.analysis?.character_tags).length > 0}
-              <div class="tag-group">
-                <strong>Character</strong>
-                <div class="chip-row">
-                  {#each sortedScores(selectedMedia.analysis?.character_tags).slice(0, 10) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if sortedScores(selectedMedia.analysis?.general_tags).length > 0}
-              <div class="tag-group">
-                <strong>General</strong>
-                <div class="chip-row">
-                  {#each sortedScores(selectedMedia.analysis?.general_tags).slice(0, 18) as [tag, score]}
-                    <span class="chip">{tag}: {scorePercent(score)}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
+            <MediaAnalysisPanel
+              analysis={selectedMedia.analysis}
+              analyses={selectedMedia.analyses}
+            />
 
             <div class="actions-row">
               <a
@@ -981,39 +1029,6 @@
                 Source detail
               </a>
             </div>
-
-            {#if selectedMedia.analyses.length > 0}
-              <div class="actions-row">
-                <button
-                  class="button"
-                  data-tone="quiet"
-                  onclick={() => {
-                    showAnalysisDetails = !showAnalysisDetails;
-                  }}
-                >
-                  {showAnalysisDetails ? 'Hide analysis details' : 'Show analysis details'}
-                </button>
-              </div>
-              {#if showAnalysisDetails}
-                <div class="analysis-stack">
-                  {#each selectedMedia.analyses as analysis}
-                    <div
-                      class="analysis-row"
-                      data-active={analysis.analysis_profile_id === selectedMedia.analysis?.analysis_profile_id}
-                    >
-                      <div>
-                        <strong>{analysis.model_name}</strong>
-                        <p>{analysis.model_version} · {analysis.scoring_version}</p>
-                      </div>
-                      <span>{scorePercent(analysis.illustration_score)}</span>
-                      <p>
-                        stored {analysis.stored_general_tag_count} general · {analysis.stored_character_tag_count} character
-                      </p>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            {/if}
           </aside>
         </section>
       {/if}
