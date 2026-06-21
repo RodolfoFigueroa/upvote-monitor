@@ -36,12 +36,21 @@ The most interesting newer alternative is `pixai-labs/pixai-tagger-v0.9`, especi
 Use a pluggable tagger backend with this default order:
 
 1. Default: `SmilingWolf/wd-swinv2-tagger-v3`
-2. Optional high-quality backend: `deepghs/pixai-tagger-v0.9-onnx`
-3. Experimental backends: `fancyfeast/joytag`, `Camais03/camie-tagger-v2`
-4. Power-user backend: `lodestones/taggerine`
-5. Legacy fallback: DeepDanbooru ONNX ports
+2. Optional high-quality WD-compatible profile: `SmilingWolf/wd-eva02-large-tagger-v3`
+3. Optional high-quality backend: `deepghs/pixai-tagger-v0.9-onnx`
+4. Experimental backends: `fancyfeast/joytag`, `Camais03/camie-tagger-v2`
+5. Power-user backend: `lodestones/taggerine`
+6. Legacy fallback: DeepDanbooru ONNX ports
 
 The app should store the selected model name/version with every analysis result. This matters because tag scores are not comparable across models.
+
+Implemented WD-compatible profiles:
+
+- `SmilingWolf/wd-swinv2-tagger-v3`
+- `SmilingWolf/wd-eva02-large-tagger-v3`
+- `SmilingWolf/wd-v1-4-vit-tagger-v2`
+
+The current WD backend expects Hugging Face repos with `model.onnx` and `selected_tags.csv` using WD-style tag categories. PixAI, Camie, JoyTag, Taggerine, and DeepDanbooru entries require separate backend adapters rather than only new profile rows.
 
 ## Product Implications
 

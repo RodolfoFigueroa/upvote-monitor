@@ -12,6 +12,10 @@ from upvote_monitor.services.tagging.profiles import (
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import (
     DEFAULT_MODEL_REPO_ID,
+    WD_COMPATIBLE_MODEL_REPOS,
+    WD_EVA02_LARGE_V3_REPO_ID,
+    WD_SWINV2_V3_REPO_ID,
+    WD_V1_4_VIT_V2_REPO_ID,
     WDTagger,
     WDTaggerResult,
 )
@@ -21,8 +25,12 @@ __all__ = [
     "AnalysisBatchResult",
     "BUILT_IN_ANALYSIS_PROFILES",
     "SCORING_VERSION",
+    "WD_COMPATIBLE_MODEL_REPOS",
+    "WD_EVA02_LARGE_V3_REPO_ID",
+    "WD_SWINV2_V3_REPO_ID",
     "WDTagger",
     "WDTaggerResult",
+    "WD_V1_4_VIT_V2_REPO_ID",
     "active_analysis_profile",
     "ensure_default_analysis_profiles",
     "list_analysis_profiles",

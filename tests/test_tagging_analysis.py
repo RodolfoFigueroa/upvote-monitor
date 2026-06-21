@@ -11,6 +11,7 @@ from upvote_monitor.api.items import analyze_item_endpoint
 from upvote_monitor.db.models import (
     AnalysisProfile,
     AppSettings,
+    DEFAULT_ANALYSIS_PROFILE_ID,
     MediaAnalysis,
     MediaAttachment,
     ReviewItem,
@@ -25,10 +26,22 @@ from upvote_monitor.schemas.items import ItemDetail
 from upvote_monitor.services.ingest import IngestResult
 from upvote_monitor.services.download import DownloadBatchResult
 from upvote_monitor.services.refresh import create_refresh_run, execute_refresh_run
-from upvote_monitor.services.tagging.analysis import process_pending_analysis
-from upvote_monitor.services.tagging.profiles import SCORING_VERSION
+from upvote_monitor.services.tagging.analysis import (
+    TaggerUnavailableError,
+    analyze_item,
+    process_pending_analysis,
+)
+from upvote_monitor.services.tagging.profiles import (
+    BUILT_IN_ANALYSIS_PROFILES,
+    SCORING_VERSION,
+    ensure_default_analysis_profiles,
+)
 from upvote_monitor.services.tagging.scoring import score_illustration
-from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult
+from upvote_monitor.services.tagging.wd_tagger import (
+    WD_EVA02_LARGE_V3_REPO_ID,
+    WDTaggerResult,
+    get_wd_tagger,
+)
 
 TEST_PROFILE_ID = "fake-wd-default"
 
@@ -171,6 +184,29 @@ def test_scoring_prefers_danbooru_like_illustration_tags() -> None:
     assert photo < 0.5
 
 
+def test_default_settings_use_swinv2_profile() -> None:
+    settings = AppSettings()
+
+    assert settings.active_analysis_profile_id == DEFAULT_ANALYSIS_PROFILE_ID
+
+
+def test_default_analysis_profiles_include_eva02(engine: Engine) -> None:
+    with Session(engine) as session:
+        ensure_default_analysis_profiles(session)
+
+        profiles = {
+            profile.id: profile for profile in session.exec(select(AnalysisProfile)).all()
+        }
+        assert {profile.id for profile in BUILT_IN_ANALYSIS_PROFILES} <= set(profiles)
+        assert profiles["wd-eva02-large-v3"].model_name == WD_EVA02_LARGE_V3_REPO_ID
+        assert profiles["wd-eva02-large-v3"].auto_approve_threshold == 0.92
+
+
+def test_wd_tagger_rejects_incompatible_model_repo() -> None:
+    with pytest.raises(ValueError, match="not supported by the WD tagger"):
+        get_wd_tagger("unsupported/model")
+
+
 def test_pending_analysis_persists_tags_and_auto_approves(
     engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -209,6 +245,46 @@ def test_pending_analysis_persists_tags_and_auto_approves(
         assert detail.media[0].analysis is not None
         assert detail.media[0].analysis.general_tags["manga"] == 0.94
         assert detail.media[0].analysis.character_tags["hatsune_miku"] == 0.91
+
+
+def test_pending_analysis_uses_selected_eva02_profile(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+
+    with Session(engine) as session:
+        ensure_default_analysis_profiles(session)
+        session.add(
+            AppSettings(
+                id=1,
+                approval_mode=ApprovalMode.MANUAL,
+                refresh_cron="0 */6 * * *",
+                refresh_enabled=True,
+                download_base_dir="/download",
+                illustration_tagger_enabled=True,
+                illustration_auto_approve_enabled=False,
+                active_analysis_profile_id="wd-eva02-large-v3",
+            )
+        )
+        item = make_item("eva-profile")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        result = process_pending_analysis(session, FakeTagger())
+
+        analysis = session.exec(select(MediaAnalysis)).one()
+        assert result.analyzed == 1
+        assert analysis.analysis_profile_id == "wd-eva02-large-v3"
+        assert analysis.model_name == WD_EVA02_LARGE_V3_REPO_ID
+        assert analysis.scoring_version == SCORING_VERSION
 
 
 def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
@@ -408,6 +484,43 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
         assert second_detail.media[0].analysis.general_tags["manga"] == 0.94
         assert second_detail.media[0].analysis.character_tags["hatsune_miku"] == 0.91
         assert "realistic" not in second_detail.media[0].analysis.general_tags
+
+
+def test_manual_analysis_rejects_unsupported_active_profile(engine: Engine) -> None:
+    with Session(engine) as session:
+        profile_id = "unsupported-profile"
+        session.add(
+            AnalysisProfile(
+                id=profile_id,
+                name="Unsupported",
+                model_name="unsupported/model",
+                model_version="main",
+                scoring_version=SCORING_VERSION,
+                general_tag_storage_threshold=0.01,
+                character_tag_storage_threshold=0.01,
+                general_tag_display_threshold=0.15,
+                character_tag_display_threshold=0.35,
+                auto_approve_threshold=0.9,
+            )
+        )
+        session.add(
+            AppSettings(
+                id=1,
+                approval_mode=ApprovalMode.MANUAL,
+                refresh_cron="0 */6 * * *",
+                refresh_enabled=True,
+                download_base_dir="/download",
+                illustration_tagger_enabled=True,
+                illustration_auto_approve_enabled=False,
+                active_analysis_profile_id=profile_id,
+            )
+        )
+        item = make_item("unsupported-profile-item")
+        session.add(item)
+        session.commit()
+
+        with pytest.raises(TaggerUnavailableError):
+            analyze_item(session, item)
 
 
 def test_refresh_runs_analysis_between_ingest_and_download(

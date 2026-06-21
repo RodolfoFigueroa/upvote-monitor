@@ -8,7 +8,15 @@ import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from PIL import Image
 
-DEFAULT_MODEL_REPO_ID = "SmilingWolf/wd-swinv2-tagger-v3"
+WD_SWINV2_V3_REPO_ID = "SmilingWolf/wd-swinv2-tagger-v3"
+WD_EVA02_LARGE_V3_REPO_ID = "SmilingWolf/wd-eva02-large-tagger-v3"
+WD_V1_4_VIT_V2_REPO_ID = "SmilingWolf/wd-v1-4-vit-tagger-v2"
+WD_COMPATIBLE_MODEL_REPOS = (
+    WD_SWINV2_V3_REPO_ID,
+    WD_EVA02_LARGE_V3_REPO_ID,
+    WD_V1_4_VIT_V2_REPO_ID,
+)
+DEFAULT_MODEL_REPO_ID = WD_SWINV2_V3_REPO_ID
 MODEL_FILENAME = "model.onnx"
 TAGS_FILENAME = "selected_tags.csv"
 MODEL_CACHE_DIR = Path("/data/models/wd-tagger")
@@ -44,6 +52,9 @@ class WDTagger:
         self.model_name = repo_id
         self.model_version = revision
         self.cache_dir = cache_dir
+
+        if repo_id not in WD_COMPATIBLE_MODEL_REPOS:
+            raise ValueError(f"Model repo is not supported by the WD tagger: {repo_id}")
 
         model_path = _download_model_file(
             repo_id,
@@ -95,7 +106,7 @@ class WDTagger:
         )
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=4)
 def get_wd_tagger(
     repo_id: str = DEFAULT_MODEL_REPO_ID,
     revision: str = "main",

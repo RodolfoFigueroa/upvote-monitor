@@ -7,6 +7,11 @@ from upvote_monitor.db.models import (
     AnalysisProfile,
     AppSettings,
 )
+from upvote_monitor.services.tagging.wd_tagger import (
+    WD_EVA02_LARGE_V3_REPO_ID,
+    WD_SWINV2_V3_REPO_ID,
+    WD_V1_4_VIT_V2_REPO_ID,
+)
 
 SCORING_VERSION = "illustration-v1"
 DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD = 0.01
@@ -34,7 +39,7 @@ BUILT_IN_ANALYSIS_PROFILES = (
     BuiltInAnalysisProfile(
         id=DEFAULT_ANALYSIS_PROFILE_ID,
         name="WD SwinV2 v3",
-        model_name="SmilingWolf/wd-swinv2-tagger-v3",
+        model_name=WD_SWINV2_V3_REPO_ID,
         model_version="main",
         scoring_version=SCORING_VERSION,
         general_tag_storage_threshold=DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD,
@@ -44,9 +49,21 @@ BUILT_IN_ANALYSIS_PROFILES = (
         auto_approve_threshold=0.90,
     ),
     BuiltInAnalysisProfile(
+        id="wd-eva02-large-v3",
+        name="WD EVA02 Large v3",
+        model_name=WD_EVA02_LARGE_V3_REPO_ID,
+        model_version="main",
+        scoring_version=SCORING_VERSION,
+        general_tag_storage_threshold=DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD,
+        character_tag_storage_threshold=DEFAULT_CHARACTER_TAG_STORAGE_THRESHOLD,
+        general_tag_display_threshold=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
+        character_tag_display_threshold=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
+        auto_approve_threshold=0.92,
+    ),
+    BuiltInAnalysisProfile(
         id="wd-v1-4-vit-v2",
         name="WD v1.4 ViT v2",
-        model_name="SmilingWolf/wd-v1-4-vit-tagger-v2",
+        model_name=WD_V1_4_VIT_V2_REPO_ID,
         model_version="main",
         scoring_version=SCORING_VERSION,
         general_tag_storage_threshold=DEFAULT_GENERAL_TAG_STORAGE_THRESHOLD,
