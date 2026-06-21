@@ -10,7 +10,7 @@ from upvote_monitor.enums import (
     ListType,
     RuleTargetType,
 )
-from upvote_monitor.services.preview_cache import delete_item_preview_cache
+from upvote_monitor.services.media_workflow import set_item_media_approval
 from upvote_monitor.sources.reddit import normalize_reddit_community
 
 
@@ -151,8 +151,6 @@ def recompute_pending_items_for_rule(
         target_type=target_type,
         target_value=normalized,
     )
-    updated_item_ids: list[str] = []
-
     for item in matching_items:
         new_status = compute_initial_status(
             item,
@@ -163,8 +161,7 @@ def recompute_pending_items_for_rule(
         if new_status == ApprovalStatus.UNDER_REVIEW:
             continue
 
-        item.approval_status = new_status
-        updated_item_ids.append(item.id)
+        set_item_media_approval(session, item, new_status)
         result.updated += 1
 
         if new_status == ApprovalStatus.REJECTED:
@@ -177,11 +174,7 @@ def recompute_pending_items_for_rule(
             ):
                 result.approved_item_ids.append(item.id)
 
-        session.add(item)
-
     if result.updated:
         session.commit()
-        for item_id in updated_item_ids:
-            delete_item_preview_cache(item_id)
 
     return result

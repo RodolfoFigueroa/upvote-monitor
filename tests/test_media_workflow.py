@@ -1,0 +1,442 @@
+from collections.abc import Iterator
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import BackgroundTasks
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine
+
+from upvote_monitor.api.media import list_media, update_media
+from upvote_monitor.db.models import AppSettings, MediaAttachment, ReviewItem
+from upvote_monitor.enums import (
+    ApprovalMode,
+    ApprovalStatus,
+    DownloadStatus,
+    IllustrationLabel,
+)
+from upvote_monitor.schemas.items import MediaUpdate
+from upvote_monitor.services.download import process_pending_downloads
+from upvote_monitor.services.media_workflow import (
+    attachment_counts,
+    set_media_decision,
+)
+
+import pytest
+
+
+@pytest.fixture
+def engine() -> Iterator[Engine]:
+    db_engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(db_engine)
+    yield db_engine
+    db_engine.dispose()
+
+
+def make_item(
+    item_id: str,
+    *,
+    approval_status: ApprovalStatus = ApprovalStatus.UNDER_REVIEW,
+    download_status: DownloadStatus = DownloadStatus.PENDING,
+    created_at: datetime | None = None,
+) -> ReviewItem:
+    return ReviewItem(
+        id=item_id,
+        source="reddit",
+        source_item_id=item_id,
+        title=f"Item {item_id}",
+        author_name="author",
+        author_label="u/author",
+        community_name="art",
+        community_label="r/art",
+        item_kind="gallery",
+        source_url=f"https://reddit.com/r/art/comments/{item_id}/item/",
+        created_at=created_at or datetime.now(timezone.utc),
+        approval_status=approval_status,
+        download_status=download_status,
+        raw_data_json="{}",
+        media_count=2,
+    )
+
+
+def make_attachment(
+    item_id: str,
+    sort_index: int,
+    *,
+    approval_status: ApprovalStatus = ApprovalStatus.UNDER_REVIEW,
+    illustration_label: IllustrationLabel = IllustrationLabel.UNLABELED,
+) -> MediaAttachment:
+    return MediaAttachment(
+        item_id=item_id,
+        sort_index=sort_index,
+        media_type="image",
+        download_url=f"https://example.com/source-{sort_index}.jpg",
+        preview_url=f"https://example.com/preview-{sort_index}.jpg",
+        extension=".jpg",
+        approval_status=approval_status,
+        illustration_label=illustration_label,
+    )
+
+
+def add_settings(session: Session, tmp_path: Path) -> None:
+    session.add(
+        AppSettings(
+            id=1,
+            approval_mode=ApprovalMode.MANUAL,
+            refresh_cron="0 */6 * * *",
+            refresh_enabled=True,
+            download_base_dir=str(tmp_path),
+        )
+    )
+
+
+def test_media_decisions_recompute_parent_item_status(engine: Engine) -> None:
+    with Session(engine) as session:
+        item = make_item("mixed-decision")
+        first = make_attachment(item.id, 0)
+        second = make_attachment(item.id, 1)
+        session.add(item)
+        session.add(first)
+        session.add(second)
+        session.commit()
+        session.refresh(first)
+        session.refresh(second)
+
+        set_media_decision(
+            session,
+            first,
+            approval_status=ApprovalStatus.APPROVED,
+            illustration_label=IllustrationLabel.YES,
+        )
+        session.commit()
+        session.refresh(item)
+
+        counts = attachment_counts(session, item.id)
+        assert item.approval_status == ApprovalStatus.UNDER_REVIEW
+        assert counts.approved == 1
+        assert counts.under_review == 1
+        assert counts.unlabeled == 1
+
+        set_media_decision(session, second, approval_status=ApprovalStatus.REJECTED)
+        session.commit()
+        session.refresh(item)
+
+        assert item.approval_status == ApprovalStatus.APPROVED
+
+
+def test_media_api_lists_and_updates_media_workflow_state(engine: Engine) -> None:
+    with Session(engine) as session:
+        item = make_item("media-api")
+        first = make_attachment(
+            item.id,
+            0,
+            illustration_label=IllustrationLabel.YES,
+        )
+        second = make_attachment(item.id, 1)
+        session.add(item)
+        session.add(first)
+        session.add(second)
+        session.commit()
+        session.refresh(second)
+
+        listed = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label="yes",
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=50,
+            offset=0,
+            cursor=None,
+        )
+        assert listed.total == 1
+        assert listed.media[0].illustration_label == "yes"
+
+        assert second.id is not None
+        updated = update_media(
+            second.id,
+            MediaUpdate(approval_status="rejected", illustration_label="no"),
+            BackgroundTasks(),
+            session,
+        )
+        assert updated.approval_status == "rejected"
+        assert updated.illustration_label == "no"
+
+        stored = session.get(MediaAttachment, second.id)
+        assert stored is not None
+        assert stored.approval_status == ApprovalStatus.REJECTED
+        assert stored.illustration_label == IllustrationLabel.NO
+
+
+def test_label_only_media_update_does_not_broadcast_queue_change(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broadcasts: list[object] = []
+    monkeypatch.setattr(
+        "upvote_monitor.api.media.broadcast_review_queue_changed",
+        lambda *args, **kwargs: broadcasts.append((args, kwargs)),
+    )
+
+    with Session(engine) as session:
+        item = make_item("label-only")
+        attachment = make_attachment(item.id, 0)
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        assert attachment.id is not None
+        update_media(
+            attachment.id,
+            MediaUpdate(illustration_label="yes"),
+            BackgroundTasks(),
+            session,
+        )
+
+        assert broadcasts == []
+
+
+def test_approval_media_update_broadcasts_queue_change(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broadcasts: list[object] = []
+    monkeypatch.setattr(
+        "upvote_monitor.api.media.broadcast_review_queue_changed",
+        lambda *args, **kwargs: broadcasts.append((args, kwargs)),
+    )
+
+    with Session(engine) as session:
+        item = make_item("approval-broadcast")
+        attachment = make_attachment(item.id, 0)
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        assert attachment.id is not None
+        update_media(
+            attachment.id,
+            MediaUpdate(approval_status="rejected"),
+            BackgroundTasks(),
+            session,
+        )
+
+        assert broadcasts == [
+            (
+                (),
+                {
+                    "media_id": attachment.id,
+                    "reason": "media_decision",
+                },
+            )
+        ]
+
+
+def test_media_api_preserves_preview_index_for_gallery_media(engine: Engine) -> None:
+    with Session(engine) as session:
+        item = make_item("gallery-previews")
+        session.add(item)
+        session.add(make_attachment(item.id, 0))
+        session.add(make_attachment(item.id, 1))
+        session.commit()
+
+        listed = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label=None,
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=50,
+            offset=0,
+            cursor=None,
+        )
+
+        assert [media.preview_url for media in listed.media] == [
+            "/api/items/gallery-previews/preview/0",
+            "/api/items/gallery-previews/preview/1",
+        ]
+
+
+def test_media_api_cursor_pages_are_ordered_and_non_overlapping(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        first_item = make_item("cursor-a", created_at=created_at)
+        second_item = make_item("cursor-b", created_at=created_at)
+        session.add(first_item)
+        session.add(second_item)
+        session.add(make_attachment(first_item.id, 0))
+        session.add(make_attachment(first_item.id, 1))
+        session.add(make_attachment(second_item.id, 0))
+        session.commit()
+
+        first_page = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label=None,
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=2,
+            offset=0,
+            cursor=None,
+        )
+        assert first_page.next_cursor is not None
+        assert [(media.item_id, media.sort_index) for media in first_page.media] == [
+            ("cursor-a", 0),
+            ("cursor-a", 1),
+        ]
+
+        second_page = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label=None,
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=2,
+            offset=0,
+            cursor=first_page.next_cursor,
+        )
+        assert second_page.next_cursor is None
+        assert [(media.item_id, media.sort_index) for media in second_page.media] == [
+            ("cursor-b", 0),
+        ]
+
+
+def test_media_api_cursor_continues_after_prior_row_is_reviewed(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        item = make_item("cursor-review", created_at=created_at)
+        first = make_attachment(item.id, 0)
+        session.add(item)
+        session.add(first)
+        session.add(make_attachment(item.id, 1))
+        session.add(make_attachment(item.id, 2))
+        session.commit()
+        session.refresh(first)
+
+        first_page = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label=None,
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=1,
+            offset=0,
+            cursor=None,
+        )
+        assert first_page.next_cursor is not None
+
+        first.approval_status = ApprovalStatus.APPROVED
+        session.add(first)
+        session.commit()
+
+        second_page = list_media(
+            session=session,
+            approval_status="under_review",
+            illustration_label=None,
+            download_status=None,
+            source=None,
+            community=None,
+            author=None,
+            limit=2,
+            offset=0,
+            cursor=first_page.next_cursor,
+        )
+        assert [media.sort_index for media in second_page.media] == [1, 2]
+
+
+def test_downloads_include_only_kept_media(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    downloaded: list[int] = []
+
+    def fake_download(attachment: MediaAttachment, path: Path) -> None:
+        downloaded.append(attachment.sort_index)
+        path.with_suffix(attachment.extension or "").write_text(
+            f"media {attachment.sort_index}",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        "upvote_monitor.services.download._download_attachment_to_path",
+        fake_download,
+    )
+
+    with Session(engine) as session:
+        add_settings(session, tmp_path)
+        item = make_item("kept-only", approval_status=ApprovalStatus.APPROVED)
+        session.add(item)
+        session.add(
+            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED)
+        )
+        session.add(
+            make_attachment(item.id, 1, approval_status=ApprovalStatus.REJECTED)
+        )
+        session.add(
+            make_attachment(item.id, 2, approval_status=ApprovalStatus.APPROVED)
+        )
+        session.commit()
+
+        result = process_pending_downloads(session)
+        session.refresh(item)
+
+        assert result.triggered == 1
+        assert result.failed == 0
+        assert downloaded == [0, 2]
+        assert item.download_status == DownloadStatus.COMPLETED
+        assert (tmp_path / item.id / "00.jpg").is_file()
+        assert not (tmp_path / item.id / "01.jpg").exists()
+        assert (tmp_path / item.id / "02.jpg").is_file()
+
+
+def test_partially_reviewed_items_are_not_downloaded(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    downloaded: list[int] = []
+    monkeypatch.setattr(
+        "upvote_monitor.services.download._download_attachment_to_path",
+        lambda attachment, _path: downloaded.append(attachment.sort_index),
+    )
+
+    with Session(engine) as session:
+        add_settings(session, tmp_path)
+        item = make_item("partial", approval_status=ApprovalStatus.APPROVED)
+        session.add(item)
+        session.add(
+            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED)
+        )
+        session.add(
+            make_attachment(item.id, 1, approval_status=ApprovalStatus.UNDER_REVIEW)
+        )
+        session.commit()
+
+        result = process_pending_downloads(session)
+        session.refresh(item)
+
+        assert result.triggered == 0
+        assert result.failed == 0
+        assert downloaded == []
+        assert item.download_status == DownloadStatus.PENDING

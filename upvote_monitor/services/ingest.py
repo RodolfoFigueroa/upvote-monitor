@@ -155,7 +155,9 @@ def _review_item_from_source_item(source_item: SourceItem) -> ReviewItem:
 
 
 def _attachments_from_source_item(
-    source_item: SourceItem, item_id: str
+    source_item: SourceItem,
+    item_id: str,
+    approval_status: ApprovalStatus,
 ) -> Iterable[MediaAttachment]:
     for attachment in source_item.media:
         yield MediaAttachment(
@@ -170,6 +172,7 @@ def _attachments_from_source_item(
             duration_ms=attachment.duration_ms,
             extension=attachment.extension,
             download_strategy=attachment.download_strategy,
+            approval_status=approval_status,
         )
 
 
@@ -187,7 +190,9 @@ def ingest_items(
     new_items = 0
     skipped = 0
 
-    active_providers = providers if providers is not None else get_source_providers(session)
+    active_providers = (
+        providers if providers is not None else get_source_providers(session)
+    )
     active_providers = list(active_providers)
     if not active_providers:
         logger.warning("No source providers are configured for this refresh")
@@ -217,7 +222,11 @@ def ingest_items(
             )
 
             session.add(item)
-            for attachment in _attachments_from_source_item(source_item, item.id):
+            for attachment in _attachments_from_source_item(
+                source_item,
+                item.id,
+                item.approval_status,
+            ):
                 session.add(attachment)
 
             existing_keys.add(source_key)

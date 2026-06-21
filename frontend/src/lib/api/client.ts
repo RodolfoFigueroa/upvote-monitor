@@ -3,6 +3,10 @@ import type {
   ItemFilesResponse,
   ItemListParams,
   ItemListResponse,
+  MediaItem,
+  MediaListParams,
+  MediaListResponse,
+  MediaUpdate,
   RefreshRunResponse,
   RefreshStartResponse,
   RefreshStatusResponse,
@@ -95,6 +99,18 @@ export const api = {
     retryDownload: (id: string) =>
       request<ItemDetail>(`/api/items/${id}/retry-download`, { method: 'POST' }),
     files: (id: string) => request<ItemFilesResponse>(`/api/items/${id}/files`),
+  },
+  media: {
+    list: (params: MediaListParams = {}) =>
+      request<MediaListResponse>(`/api/media${queryString(params)}`),
+    get: (id: number) => request<MediaItem>(`/api/media/${id}`),
+    update: (id: number, body: MediaUpdate) =>
+      request<MediaItem>(`/api/media/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    analyze: (id: number) =>
+      request<MediaItem>(`/api/media/${id}/analyze`, { method: 'POST' }),
   },
   settings: {
     get: () => request<SettingsResponse>('/api/settings'),

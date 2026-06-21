@@ -3,6 +3,7 @@ export type DownloadStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 export type AnalysisStatus = 'completed' | 'failed' | 'skipped';
 export type ApprovalMode = 'auto' | 'manual';
 export type RuleTargetType = 'community' | 'author';
+export type IllustrationLabel = 'unlabeled' | 'yes' | 'no' | 'unsure';
 
 export interface AnalysisProfile {
   id: string;
@@ -35,6 +36,8 @@ export interface MediaAnalysis {
 }
 
 export interface MediaAttachment {
+  id: number;
+  item_id: string;
   sort_index: number;
   media_type: string;
   content_type: string | null;
@@ -45,6 +48,8 @@ export interface MediaAttachment {
   duration_ms: number | null;
   extension: string | null;
   download_strategy: string;
+  approval_status: ApprovalStatus;
+  illustration_label: IllustrationLabel;
   analysis: MediaAnalysis | null;
   analyses: MediaAnalysis[];
 }
@@ -69,6 +74,10 @@ export interface ItemSummary {
   preview_urls: string[];
   analysis_status: AnalysisStatus | null;
   illustration_score: number | null;
+  media_approved_count: number;
+  media_rejected_count: number;
+  media_under_review_count: number;
+  media_unlabeled_count: number;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -82,6 +91,51 @@ export interface ItemListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface MediaItem {
+  id: number;
+  item_id: string;
+  item_title: string;
+  source: string;
+  source_item_id: string;
+  source_url: string;
+  author_name: string | null;
+  author_label: string | null;
+  community_name: string | null;
+  community_label: string | null;
+  item_kind: string;
+  item_created_at: string;
+  discovered_at: string;
+  item_approval_status: ApprovalStatus;
+  item_download_status: DownloadStatus;
+  sort_index: number;
+  media_type: string;
+  content_type: string | null;
+  download_url: string;
+  preview_url: string | null;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  extension: string | null;
+  download_strategy: string;
+  approval_status: ApprovalStatus;
+  illustration_label: IllustrationLabel;
+  analysis: MediaAnalysis | null;
+  analyses: MediaAnalysis[];
+}
+
+export interface MediaListResponse {
+  media: MediaItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  next_cursor: string | null;
+}
+
+export interface MediaUpdate {
+  approval_status?: ApprovalStatus;
+  illustration_label?: IllustrationLabel;
 }
 
 export interface ItemFile {
@@ -229,6 +283,18 @@ export interface ItemListParams {
   offset?: number;
 }
 
+export interface MediaListParams {
+  approval_status?: ApprovalStatus;
+  illustration_label?: IllustrationLabel;
+  download_status?: DownloadStatus;
+  source?: string | string[];
+  community?: string;
+  author?: string;
+  limit?: number;
+  offset?: number;
+  cursor?: string;
+}
+
 export interface ItemUpdatedEvent {
   item_id: string;
   download_status: DownloadStatus;
@@ -239,4 +305,6 @@ export interface ReviewQueueChangedEvent {
   source?: string;
   target_type?: RuleTargetType;
   target_value?: string;
+  media_id?: number;
+  reason?: string;
 }

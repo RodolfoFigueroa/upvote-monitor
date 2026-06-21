@@ -10,6 +10,7 @@ from upvote_monitor.enums import (
     ApprovalStatus,
     DownloadStrategy,
     DownloadStatus,
+    IllustrationLabel,
     ListType,
     RuleTargetType,
     RefreshRunStatus,
@@ -71,6 +72,14 @@ class MediaAttachment(SQLModel, table=True):
     duration_ms: int | None = None
     extension: str | None = None
     download_strategy: DownloadStrategy = Field(default=DownloadStrategy.HTTP)
+    approval_status: ApprovalStatus = Field(
+        default=ApprovalStatus.UNDER_REVIEW,
+        index=True,
+    )
+    illustration_label: IllustrationLabel = Field(
+        default=IllustrationLabel.UNLABELED,
+        index=True,
+    )
 
 
 class AnalysisProfile(SQLModel, table=True):
@@ -108,7 +117,9 @@ class MediaAnalysis(SQLModel, table=True):
     status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED, index=True)
     illustration_score: float | None = Field(default=None, index=True)
     general_tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
-    character_tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    character_tags_json: str = Field(
+        default="{}", sa_column=Column(Text, nullable=False)
+    )
     ratings_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     error: str | None = None
     analyzed_at: datetime | None = None

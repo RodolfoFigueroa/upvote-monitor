@@ -7,6 +7,13 @@ class ApprovalStatus(IntEnum):
     UNDER_REVIEW = 2
 
 
+class IllustrationLabel(str, Enum):
+    UNLABELED = "unlabeled"
+    YES = "yes"
+    NO = "no"
+    UNSURE = "unsure"
+
+
 class DownloadStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"

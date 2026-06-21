@@ -1,24 +1,24 @@
 <script lang="ts">
   import {
-    Ban,
     Check,
     ChevronDown,
     CircleAlert,
+    ExternalLink,
     Inbox,
+    RefreshCw,
     Tags,
     X,
   } from '@lucide/svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
-  import ItemDecisionPanel from '$lib/components/ItemDecisionPanel.svelte';
-  import MediaPreview from '$lib/components/MediaPreview.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { api } from '$lib/api/client';
-  import { communityLabel, formatRelative, statusLabel } from '$lib/format';
+  import { formatRelative, isVideoUrl, statusLabel } from '$lib/format';
   import { subscribeReviewQueueChanged } from '$lib/sse/store.svelte';
   import type {
     DownloadStatus,
-    ItemDetail,
-    ItemSummary,
+    IllustrationLabel,
+    MediaItem,
+    ReviewQueueChangedEvent,
     SettingsResponse,
     SourceSettingsResponse,
   } from '$lib/types/api';
@@ -34,17 +34,37 @@
     { value: 'x', label: 'X' },
   ];
 
-  let items = $state<ItemSummary[]>([]);
-  let details = $state<Record<string, ItemDetail>>({});
-  let detailLoading = $state<Record<string, boolean>>({});
-  let pendingActions = $state<Record<string, string>>({});
-  let taggingActions = $state<Record<string, boolean>>({});
-  let selectedId = $state<string | null>(null);
+  const labelOptions: { value: IllustrationLabel; label: string }[] = [
+    { value: 'yes', label: 'Yes' },
+    { value: 'no', label: 'No' },
+    { value: 'unsure', label: 'Unsure' },
+  ];
+
+  const VISIBLE_LIMIT = 100;
+  const BUFFER_TARGET = 20;
+  const BUFFER_REFILL_THRESHOLD = 5;
+  const INITIAL_FETCH_LIMIT = VISIBLE_LIMIT + BUFFER_TARGET;
+  const LABEL_DRAFT_STORAGE_KEY = 'upvote-monitor.triage-labels.v1';
+
+  let media = $state<MediaItem[]>([]);
+  let mediaBuffer = $state<MediaItem[]>([]);
+  let nextCursor = $state<string | null>(null);
+  let selectedId = $state<number | null>(null);
   let loading = $state(true);
+  let refillingBuffer = $state(false);
+  let queueChanged = $state(false);
   let errorMessage = $state<string | null>(null);
   let actionError = $state<string | null>(null);
+  let pendingActions = $state<Record<number, string>>({});
+  let draftLabels = $state<Record<number, IllustrationLabel>>({});
+  let taggingActions = $state<Record<number, boolean>>({});
+  let showAnalysisDetails = $state(false);
+  let decidedMediaIds = new Set<number>();
+
   let draftDownloadStatus = $state<DownloadStatus | ''>('');
   let appliedDownloadStatus = $state<DownloadStatus | ''>('');
+  let draftIllustrationLabel = $state<IllustrationLabel | ''>('');
+  let appliedIllustrationLabel = $state<IllustrationLabel | ''>('');
   let sourceOptions = $state<SourceOption[]>([]);
   let sourceOptionsLoaded = $state(false);
   let draftSelectedSources = $state<string[]>([]);
@@ -56,19 +76,18 @@
   let appliedCommunity = $state('');
   let appliedAuthor = $state('');
 
-  const selectedSummary = $derived(
-    selectedId ? items.find((item) => item.id === selectedId) ?? null : null
-  );
-  const selectedDetail = $derived(selectedId ? details[selectedId] ?? null : null);
-  const selectedItem = $derived(
-    selectedId ? selectedDetail ?? selectedSummary : null
-  );
-  const selectedIsLoading = $derived(
-    selectedId ? detailLoading[selectedId] === true : false
+  const selectedMedia = $derived(
+    selectedId ? media.find((item) => item.id === selectedId) ?? null : null
   );
   const inFlightActionCount = $derived(
     Object.keys(pendingActions).length +
-      Object.values(taggingActions).filter(Boolean).length
+      Object.values(taggingActions).filter(Boolean).length +
+      (refillingBuffer ? 1 : 0)
+  );
+  const queueSummary = $derived(
+    mediaBuffer.length > 0
+      ? `${media.length} visible, ${mediaBuffer.length} buffered`
+      : `${media.length} pending`
   );
   const draftSelectedSourceLabels = $derived(draftSelectedSources.map(sourceDisplayLabel));
   const appliedSelectedSourceLabels = $derived(appliedSelectedSources.map(sourceDisplayLabel));
@@ -84,6 +103,7 @@
   const hasAppliedFilters = $derived(
     Boolean(
       appliedDownloadStatus ||
+        appliedIllustrationLabel ||
         appliedSelectedSources.length > 0 ||
         appliedCommunity ||
         appliedAuthor
@@ -92,6 +112,7 @@
   const hasDraftFilters = $derived(
     Boolean(
       draftDownloadStatus ||
+        draftIllustrationLabel ||
         draftSelectedSources.length > 0 ||
         draftCommunity ||
         draftAuthor
@@ -109,9 +130,151 @@
     );
   }
 
+  function sourceLabel(value: MediaItem): string {
+    return value.source.charAt(0).toUpperCase() + value.source.slice(1);
+  }
+
+  function communityLabel(value: MediaItem): string {
+    return value.community_label ?? value.author_label ?? sourceLabel(value);
+  }
+
+  function mediaUrl(value: MediaItem): string {
+    return value.preview_url ?? value.download_url;
+  }
+
+  function mediaType(value: MediaItem): string | undefined {
+    return value.content_type ?? value.media_type;
+  }
+
+  function scorePercent(value: number | null | undefined): string {
+    if (value === null || value === undefined) return 'unscored';
+    return `${Math.round(value * 100)}%`;
+  }
+
+  function sortedScores(scores: Record<string, number> | undefined): [string, number][] {
+    return Object.entries(scores ?? {}).sort((a, b) => b[1] - a[1]);
+  }
+
+  function isIllustrationLabel(value: unknown): value is IllustrationLabel {
+    return value === 'unlabeled' || value === 'yes' || value === 'no' || value === 'unsure';
+  }
+
+  function loadDraftLabels() {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.sessionStorage.getItem(LABEL_DRAFT_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+
+      const result: Record<number, IllustrationLabel> = {};
+      for (const [id, value] of Object.entries(parsed)) {
+        const mediaId = Number(id);
+        if (Number.isInteger(mediaId) && isIllustrationLabel(value)) {
+          result[mediaId] = value;
+        }
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  function saveDraftLabels(nextDraftLabels: Record<number, IllustrationLabel>) {
+    if (typeof window === 'undefined') return;
+    if (Object.keys(nextDraftLabels).length === 0) {
+      window.sessionStorage.removeItem(LABEL_DRAFT_STORAGE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(
+      LABEL_DRAFT_STORAGE_KEY,
+      JSON.stringify(nextDraftLabels)
+    );
+  }
+
+  function setDraftLabel(mediaId: number, label: IllustrationLabel) {
+    const nextDraftLabels = { ...draftLabels, [mediaId]: label };
+    draftLabels = nextDraftLabels;
+    saveDraftLabels(nextDraftLabels);
+  }
+
+  function clearDraftLabel(mediaId: number) {
+    const { [mediaId]: _, ...rest } = draftLabels;
+    draftLabels = rest;
+    saveDraftLabels(rest);
+  }
+
+  function localLabel(item: MediaItem): IllustrationLabel {
+    return draftLabels[item.id] ?? item.illustration_label;
+  }
+
+  function applyDraftLabel(item: MediaItem): MediaItem {
+    const label = draftLabels[item.id];
+    return label === undefined ? item : { ...item, illustration_label: label };
+  }
+
+  function patchMediaInQueues(mediaId: number, patch: Partial<MediaItem>) {
+    media = media.map((item) => (item.id === mediaId ? { ...item, ...patch } : item));
+    mediaBuffer = mediaBuffer.map((item) =>
+      item.id === mediaId ? { ...item, ...patch } : item
+    );
+  }
+
+  function fetchedMedia(
+    items: MediaItem[],
+    knownIds = new Set<number>(),
+  ): MediaItem[] {
+    const result: MediaItem[] = [];
+    for (const item of items) {
+      if (
+        knownIds.has(item.id) ||
+        decidedMediaIds.has(item.id) ||
+        pendingActions[item.id] !== undefined
+      ) {
+        continue;
+      }
+      knownIds.add(item.id);
+      result.push(applyDraftLabel(item));
+    }
+    return result;
+  }
+
+  function listParams(limit: number, cursor?: string | null) {
+    return {
+      approval_status: 'under_review' as const,
+      illustration_label: appliedIllustrationLabel || undefined,
+      download_status: appliedDownloadStatus || undefined,
+      source: appliedSelectedSources.length > 0 ? appliedSelectedSources : undefined,
+      community: appliedCommunity.trim() || undefined,
+      author: appliedAuthor.trim() || undefined,
+      limit,
+      cursor: cursor ?? undefined,
+    };
+  }
+
+  function selectAfterQueueChange(
+    previousSelectedId: number | null,
+    previousSelectedIndex: number,
+  ) {
+    if (
+      previousSelectedId &&
+      media.some((item) => item.id === previousSelectedId)
+    ) {
+      selectedId = previousSelectedId;
+    } else if (previousSelectedIndex >= 0) {
+      selectedId =
+        media[
+          Math.min(previousSelectedIndex, Math.max(media.length - 1, 0))
+        ]?.id ?? null;
+    } else {
+      selectedId = media[0]?.id ?? null;
+    }
+  }
+
   function filtersChanged() {
     return (
       appliedDownloadStatus !== draftDownloadStatus ||
+      appliedIllustrationLabel !== draftIllustrationLabel ||
       appliedCommunity !== draftCommunity ||
       appliedAuthor !== draftAuthor ||
       appliedSelectedSources.length !== draftSelectedSources.length ||
@@ -143,26 +306,21 @@
     }
     errorMessage = null;
     try {
-      const response = await api.items.list({
-        approval_status: 'under_review',
-        download_status: appliedDownloadStatus || undefined,
-        source: appliedSelectedSources.length > 0 ? appliedSelectedSources : undefined,
-        community: appliedCommunity.trim() || undefined,
-        author: appliedAuthor.trim() || undefined,
-        limit: 50,
-      });
-      const availableItems = response.items.filter(
-        (item) => pendingActions[item.id] === undefined
-      );
-      items = availableItems;
-      if (!selectedId || !availableItems.some((item) => item.id === selectedId)) {
-        selectedId = availableItems[0]?.id ?? null;
-      }
-      if (selectedId) {
-        void hydrateDetail(selectedId);
-      }
+      const previousSelectedId = selectedId;
+      const previousSelectedIndex = previousSelectedId
+        ? media.findIndex((item) => item.id === previousSelectedId)
+        : -1;
+      decidedMediaIds = new Set();
+
+      const response = await api.media.list(listParams(INITIAL_FETCH_LIMIT));
+      const availableMedia = fetchedMedia(response.media);
+      media = availableMedia.slice(0, VISIBLE_LIMIT);
+      mediaBuffer = availableMedia.slice(VISIBLE_LIMIT);
+      nextCursor = response.next_cursor;
+      queueChanged = false;
+      selectAfterQueueChange(previousSelectedId, previousSelectedIndex);
     } catch (e) {
-      errorMessage = e instanceof Error ? e.message : 'Failed to load review queue';
+      errorMessage = e instanceof Error ? e.message : 'Failed to load triage queue';
     } finally {
       if (!options.quiet) {
         loading = false;
@@ -170,25 +328,32 @@
     }
   }
 
-  async function hydrateDetail(itemId: string) {
-    if (details[itemId] || detailLoading[itemId]) return;
-    detailLoading = { ...detailLoading, [itemId]: true };
-    try {
-      const detail = await api.items.get(itemId);
-      details = { ...details, [itemId]: detail };
-    } catch {
-      // The summary remains usable if detail hydration fails.
-    } finally {
-      detailLoading = { ...detailLoading, [itemId]: false };
-    }
-  }
-
   function commitFilters() {
     if (!filtersChanged()) return;
     appliedDownloadStatus = draftDownloadStatus;
+    appliedIllustrationLabel = draftIllustrationLabel;
     appliedSelectedSources = [...draftSelectedSources];
     appliedCommunity = draftCommunity;
     appliedAuthor = draftAuthor;
+    void load();
+  }
+
+  function clearFilters() {
+    draftDownloadStatus = '';
+    draftIllustrationLabel = '';
+    draftSelectedSources = [];
+    draftCommunity = '';
+    draftAuthor = '';
+    appliedDownloadStatus = '';
+    appliedIllustrationLabel = '';
+    appliedSelectedSources = [];
+    appliedCommunity = '';
+    appliedAuthor = '';
+    sourceMenuOpen = false;
+    void load();
+  }
+
+  function manualRefresh() {
     void load();
   }
 
@@ -199,17 +364,11 @@
     commitFilters();
   }
 
-  function clearFilters() {
-    draftDownloadStatus = '';
-    draftSelectedSources = [];
-    draftCommunity = '';
-    draftAuthor = '';
-    appliedDownloadStatus = '';
-    appliedSelectedSources = [];
-    appliedCommunity = '';
-    appliedAuthor = '';
-    sourceMenuOpen = false;
-    void load();
+  function changeIllustrationLabel(event: Event) {
+    draftIllustrationLabel = (event.currentTarget as HTMLSelectElement).value as
+      | IllustrationLabel
+      | '';
+    commitFilters();
   }
 
   function toggleSourceMenu() {
@@ -244,368 +403,620 @@
     }
   }
 
-  function selectItem(itemId: string) {
-    selectedId = itemId;
-    void hydrateDetail(itemId);
+  function selectMedia(mediaId: number) {
+    selectedId = mediaId;
+    showAnalysisDetails = false;
   }
 
-  function itemBusy(itemId: string): boolean {
-    return pendingActions[itemId] !== undefined || taggingActions[itemId] === true;
+  function itemBusy(mediaId: number): boolean {
+    return decisionBusy(mediaId) || taggingActions[mediaId] === true;
   }
 
-  function updateSummaryFromDetail(detail: ItemDetail) {
-    const {
-      download_error: _downloadError,
-      media: _media,
-      source_urls: _sourceUrls,
-      ...summary
-    } = detail;
-    items = items.map((item) => (item.id === detail.id ? { ...item, ...summary } : item));
+  function decisionBusy(mediaId: number): boolean {
+    return pendingActions[mediaId] !== undefined;
   }
 
-  async function analyzeSelectedItem(itemId: string) {
-    actionError = null;
-    taggingActions = { ...taggingActions, [itemId]: true };
+  function labelTarget(item: MediaItem, label: IllustrationLabel): IllustrationLabel {
+    return item.illustration_label === label ? 'unlabeled' : label;
+  }
+
+  function promoteFromBuffer() {
+    const slots = VISIBLE_LIMIT - media.length;
+    if (slots <= 0 || mediaBuffer.length === 0) return;
+    media = [...media, ...mediaBuffer.slice(0, slots)];
+    mediaBuffer = mediaBuffer.slice(slots);
+  }
+
+  function removeFromQueue(mediaId: number) {
+    const index = media.findIndex((item) => item.id === mediaId);
+    media = media.filter((item) => item.id !== mediaId);
+    promoteFromBuffer();
+    if (selectedId === mediaId) {
+      selectedId = media[index]?.id ?? media[index - 1]?.id ?? null;
+      showAnalysisDetails = false;
+    }
+  }
+
+  function knownQueueIds() {
+    return new Set([
+      ...media.map((item) => item.id),
+      ...mediaBuffer.map((item) => item.id),
+      ...decidedMediaIds,
+    ]);
+  }
+
+  async function refillBufferIfNeeded() {
+    if (
+      refillingBuffer ||
+      nextCursor === null ||
+      mediaBuffer.length > BUFFER_REFILL_THRESHOLD
+    ) {
+      return;
+    }
+
+    refillingBuffer = true;
     try {
-      const detail = await api.items.analyze(itemId);
-      details = { ...details, [itemId]: detail };
-      updateSummaryFromDetail(detail);
+      let cursor: string | null = nextCursor;
+      let nextBuffer = mediaBuffer;
+      const knownIds = knownQueueIds();
+      let pagesRead = 0;
+
+      while (cursor && nextBuffer.length < BUFFER_TARGET && pagesRead < 5) {
+        const response = await api.media.list(listParams(BUFFER_TARGET, cursor));
+        cursor = response.next_cursor;
+        nextBuffer = [...nextBuffer, ...fetchedMedia(response.media, knownIds)];
+        pagesRead += 1;
+      }
+
+      mediaBuffer = nextBuffer;
+      nextCursor = cursor;
+      promoteFromBuffer();
+      if (!selectedId && media.length > 0) {
+        selectedId = media[0].id;
+      }
     } catch (e) {
-      actionError = e instanceof Error ? e.message : 'Tagging failed';
+      actionError = e instanceof Error ? e.message : 'Failed to refill triage queue';
     } finally {
-      const { [itemId]: _, ...rest } = taggingActions;
-      taggingActions = rest;
+      refillingBuffer = false;
     }
   }
 
-  function removeOptimistically(itemId: string) {
-    const index = items.findIndex((item) => item.id === itemId);
-    items = items.filter((item) => item.id !== itemId);
-    if (selectedId === itemId) {
-      selectedId = items[index]?.id ?? items[index - 1]?.id ?? null;
-      if (selectedId) {
-        void hydrateDetail(selectedId);
-      }
-    }
-  }
+  async function decideMedia(mediaId: number, status: 'approved' | 'rejected') {
+    const target = media.find((item) => item.id === mediaId);
+    if (!target) return;
 
-  function communityBlacklistRuleForItem(item: ItemSummary | ItemDetail | undefined) {
-    if (item?.community_name) {
-      return {
-        source: item.source,
-        target_type: 'community' as const,
-        target_value: item.community_name,
-      };
-    }
-    return null;
-  }
-
-  function authorBlacklistRuleForItem(item: ItemSummary | ItemDetail | undefined) {
-    if (item?.author_name) {
-      return {
-        source: item.source,
-        target_type: 'author' as const,
-        target_value: item.author_name,
-      };
-    }
-    return null;
-  }
-
-  async function actOnItem(
-    itemId: string,
-    action: 'approve' | 'reject' | 'reject_blacklist_community' | 'reject_blacklist_author'
-  ) {
-    const previousItems = items;
+    const previousMedia = media;
+    const previousBuffer = mediaBuffer;
     const previousSelected = selectedId;
+    const previousCursor = nextCursor;
+    const previousDecidedIds = new Set(decidedMediaIds);
+    const persistedLabel = localLabel(target);
+
     actionError = null;
-    pendingActions = { ...pendingActions, [itemId]: action };
-    removeOptimistically(itemId);
+    pendingActions = { ...pendingActions, [mediaId]: status };
+    decidedMediaIds = new Set(decidedMediaIds);
+    decidedMediaIds.add(mediaId);
+    removeFromQueue(mediaId);
 
     try {
-      if (action === 'approve') {
-        await api.items.approve(itemId);
+      await api.media.update(mediaId, {
+        approval_status: status,
+        illustration_label: persistedLabel,
+      });
+      clearDraftLabel(mediaId);
+      if (media.length === 0 && mediaBuffer.length === 0) {
+        void load({ quiet: true });
       } else {
-        await api.items.reject(itemId);
-        if (action === 'reject_blacklist_community' || action === 'reject_blacklist_author') {
-          const item = previousItems.find((candidate) => candidate.id === itemId);
-          const rule =
-            action === 'reject_blacklist_community'
-              ? communityBlacklistRuleForItem(item)
-              : authorBlacklistRuleForItem(item);
-          if (rule) {
-            await api.rules.addBlacklist(rule);
-          }
-        }
+        void refillBufferIfNeeded();
       }
-      await load({ quiet: true });
     } catch (e) {
-      items = previousItems;
+      media = previousMedia;
+      mediaBuffer = previousBuffer;
       selectedId = previousSelected;
+      nextCursor = previousCursor;
+      decidedMediaIds = previousDecidedIds;
       actionError = e instanceof Error ? e.message : 'Action failed';
     } finally {
-      const { [itemId]: _, ...rest } = pendingActions;
+      const { [mediaId]: _, ...rest } = pendingActions;
       pendingActions = rest;
     }
   }
 
+  async function labelMedia(mediaId: number, label: IllustrationLabel) {
+    const current = media.find((item) => item.id === mediaId);
+    if (!current || pendingActions[mediaId] !== undefined) return;
+
+    const nextLabel = labelTarget(current, label);
+    actionError = null;
+    setDraftLabel(mediaId, nextLabel);
+    patchMediaInQueues(mediaId, { illustration_label: nextLabel });
+  }
+
+  async function analyzeMedia(mediaId: number) {
+    actionError = null;
+    taggingActions = { ...taggingActions, [mediaId]: true };
+    try {
+      const updated = applyDraftLabel(await api.media.analyze(mediaId));
+      if (updated.approval_status !== 'under_review') {
+        decidedMediaIds = new Set(decidedMediaIds);
+        decidedMediaIds.add(mediaId);
+        removeFromQueue(mediaId);
+        clearDraftLabel(mediaId);
+        void refillBufferIfNeeded();
+      } else {
+        patchMediaInQueues(mediaId, updated);
+      }
+    } catch (e) {
+      actionError = e instanceof Error ? e.message : 'Tagging failed';
+    } finally {
+      const { [mediaId]: _, ...rest } = taggingActions;
+      taggingActions = rest;
+    }
+  }
+
+  function moveSelection(delta: number) {
+    if (media.length === 0) return;
+    const currentIndex = selectedId
+      ? media.findIndex((item) => item.id === selectedId)
+      : -1;
+    const nextIndex = Math.min(
+      media.length - 1,
+      Math.max(0, (currentIndex === -1 ? 0 : currentIndex) + delta)
+    );
+    selectMedia(media[nextIndex].id);
+  }
+
+  function handleKeyboard(event: KeyboardEvent) {
+    if (
+      event.target instanceof HTMLInputElement ||
+      event.target instanceof HTMLSelectElement ||
+      event.target instanceof HTMLTextAreaElement
+    ) {
+      return;
+    }
+    if (!selectedMedia) return;
+
+    if (event.key === 'k' || event.key === 'K') {
+      if (itemBusy(selectedMedia.id)) return;
+      event.preventDefault();
+      void decideMedia(selectedMedia.id, 'approved');
+    } else if (event.key === 'r' || event.key === 'R') {
+      if (itemBusy(selectedMedia.id)) return;
+      event.preventDefault();
+      void decideMedia(selectedMedia.id, 'rejected');
+    } else if (event.key === '1') {
+      if (decisionBusy(selectedMedia.id)) return;
+      event.preventDefault();
+      void labelMedia(selectedMedia.id, 'yes');
+    } else if (event.key === '2') {
+      if (decisionBusy(selectedMedia.id)) return;
+      event.preventDefault();
+      void labelMedia(selectedMedia.id, 'no');
+    } else if (event.key === '3') {
+      if (decisionBusy(selectedMedia.id)) return;
+      event.preventDefault();
+      void labelMedia(selectedMedia.id, 'unsure');
+    } else if (event.key === 'ArrowDown' || event.key === 'j') {
+      event.preventDefault();
+      moveSelection(1);
+    } else if (event.key === 'ArrowUp' || event.key === 'p') {
+      event.preventDefault();
+      moveSelection(-1);
+    }
+  }
+
+  function handleQueueChanged(event: ReviewQueueChangedEvent) {
+    if (
+      event.reason === 'media_decision' &&
+      event.media_id !== undefined &&
+      decidedMediaIds.has(event.media_id)
+    ) {
+      return;
+    }
+    queueChanged = true;
+  }
+
   onMount(() => {
     void (async () => {
+      draftLabels = loadDraftLabels();
       await loadSourceOptions();
       await load();
     })();
     document.addEventListener('click', closeSourceMenuOnOutsideClick);
-    const unsubscribeReviewQueueChanged = subscribeReviewQueueChanged(() => {
-      void load({ quiet: true });
-    });
+    document.addEventListener('keydown', handleKeyboard);
+    const unsubscribeReviewQueueChanged = subscribeReviewQueueChanged(handleQueueChanged);
     return () => {
       document.removeEventListener('click', closeSourceMenuOnOutsideClick);
+      document.removeEventListener('keydown', handleKeyboard);
       unsubscribeReviewQueueChanged();
     };
   });
 </script>
 
 <div class="review-page">
-<div class="page-header">
-  <div>
-    <p class="eyebrow">Review queue</p>
-    <h1>Decide what gets downloaded</h1>
-    <p>Fast summaries first, richer media only when an item is selected.</p>
-  </div>
-  <div class="metric-strip">
-    <div class="metric">
-      <strong>{items.length}</strong>
-      <span>awaiting decision</span>
+  <div class="page-header">
+    <div>
+      <p class="eyebrow">Triage</p>
+      <h1>Review extracted media</h1>
+      <p>Keep, reject, label, and tag individual media before download.</p>
     </div>
-    <div class="metric">
-      <strong>{inFlightActionCount}</strong>
-      <span>in flight</span>
+    <div class="metric-strip">
+      <div class="metric">
+        <strong>{media.length}</strong>
+        <span>visible media</span>
+      </div>
+      <div class="metric">
+        <strong>{inFlightActionCount}</strong>
+        <span>in flight</span>
+      </div>
     </div>
   </div>
-</div>
 
-<div class="filter-bar">
-  <div class="field">
-    <span>Download</span>
-    <select class="select" value={draftDownloadStatus} onchange={changeDownloadStatus}>
-      <option value="">Any</option>
-      <option value="pending">Pending</option>
-      <option value="in_progress">In progress</option>
-      <option value="completed">Completed</option>
-      <option value="failed">Failed</option>
-    </select>
+  <div class="filter-bar">
+    <div class="field">
+      <span>Download</span>
+      <select class="select" value={draftDownloadStatus} onchange={changeDownloadStatus}>
+        <option value="">Any</option>
+        <option value="pending">Pending</option>
+        <option value="in_progress">In progress</option>
+        <option value="completed">Completed</option>
+        <option value="failed">Failed</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>Illustration</span>
+      <select class="select" value={draftIllustrationLabel} onchange={changeIllustrationLabel}>
+        <option value="">Any</option>
+        <option value="unlabeled">Unlabeled</option>
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+        <option value="unsure">Unsure</option>
+      </select>
+    </div>
+    <div class="field source-field">
+      <span>Source</span>
+      <div class="multi-select" bind:this={sourceMenuElement}>
+        <button
+          type="button"
+          class="multi-select__button"
+          aria-haspopup="listbox"
+          aria-expanded={sourceMenuOpen}
+          disabled={!sourceOptionsLoaded || sourceOptions.length === 0}
+          onclick={toggleSourceMenu}
+        >
+          <span>{sourceButtonLabel}</span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        {#if sourceMenuOpen}
+          <div class="multi-select__menu" role="listbox" aria-multiselectable="true">
+            {#each sourceOptions as option}
+              <label class="multi-select__option">
+                <input
+                  class="multi-select__checkbox"
+                  type="checkbox"
+                  checked={draftSelectedSources.includes(option.value)}
+                  onchange={() => toggleSource(option.value)}
+                />
+                <span>{option.label}</span>
+              </label>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+    <div class="field">
+      <span>Community</span>
+      <input
+        class="input"
+        bind:value={draftCommunity}
+        placeholder="pics"
+        onblur={commitFilters}
+        onkeydown={(event) => {
+          if (event.key === 'Enter') commitFilters();
+        }}
+      />
+    </div>
+    <div class="field">
+      <span>Author</span>
+      <input
+        class="input"
+        bind:value={draftAuthor}
+        placeholder="@handle"
+        onblur={commitFilters}
+        onkeydown={(event) => {
+          if (event.key === 'Enter') commitFilters();
+        }}
+      />
+    </div>
+    <button
+      class="button"
+      data-tone="quiet"
+      onclick={clearFilters}
+      disabled={!hasAppliedFilters && !hasDraftFilters}
+    >
+      <X size={16} />
+      Clear
+    </button>
   </div>
-  <div class="field source-field">
-    <span>Source</span>
-    <div class="multi-select" bind:this={sourceMenuElement}>
-      <button
-        type="button"
-        class="multi-select__button"
-        aria-haspopup="listbox"
-        aria-expanded={sourceMenuOpen}
-        disabled={!sourceOptionsLoaded || sourceOptions.length === 0}
-        onclick={toggleSourceMenu}
-      >
-        <span>{sourceButtonLabel}</span>
-        <ChevronDown size={16} aria-hidden="true" />
+
+  {#if hasAppliedFilters}
+    <div class="chip-row">
+      {#if appliedDownloadStatus}<span class="chip">download: {statusLabel(appliedDownloadStatus)}</span>{/if}
+      {#if appliedIllustrationLabel}<span class="chip">illustration: {statusLabel(appliedIllustrationLabel)}</span>{/if}
+      {#if appliedSelectedSources.length > 0}
+        <span class="chip">source: {appliedSelectedSourceLabels.join(', ')}</span>
+      {/if}
+      {#if appliedCommunity}<span class="chip">community: {appliedCommunity}</span>{/if}
+      {#if appliedAuthor}<span class="chip">author: {appliedAuthor}</span>{/if}
+    </div>
+  {/if}
+
+  {#if actionError}
+    <div class="notice" data-tone="danger">
+      <CircleAlert size={16} />
+      {actionError}
+    </div>
+  {/if}
+
+  {#if queueChanged}
+    <div class="notice">
+      <CircleAlert size={16} />
+      <span>Queue changed in the background.</span>
+      <button class="button" data-tone="quiet" onclick={manualRefresh}>
+        <RefreshCw size={16} />
+        Refresh
       </button>
-      {#if sourceMenuOpen}
-        <div class="multi-select__menu" role="listbox" aria-multiselectable="true">
-          {#each sourceOptions as option}
-            <label class="multi-select__option">
-              <input
-                class="multi-select__checkbox"
-                type="checkbox"
-                checked={draftSelectedSources.includes(option.value)}
-                onchange={() => toggleSource(option.value)}
-              />
-              <span>{option.label}</span>
-            </label>
+    </div>
+  {/if}
+
+  {#if loading}
+    <div class="triage-grid">
+      <section class="panel queue-panel">
+        <div class="panel-header">
+          <h2>Media</h2>
+          <span>Loading</span>
+        </div>
+        <div class="queue-list">
+          {#each Array.from({ length: 6 }) as _}
+            <div class="queue-item">
+              <div class="skeleton" style="width: 76px; height: 64px;"></div>
+              <div>
+                <div class="skeleton" style="height: 18px; margin-bottom: 10px;"></div>
+                <div class="skeleton" style="width: 70%; height: 14px;"></div>
+              </div>
+            </div>
           {/each}
         </div>
+      </section>
+      <section class="panel media-workbench">
+        <div class="skeleton" style="height: 520px;"></div>
+      </section>
+    </div>
+  {:else if errorMessage}
+    <EmptyState title="Triage queue did not load" body={errorMessage} />
+  {:else if media.length === 0}
+    <EmptyState
+      title="Nothing needs triage"
+      body="New under-review media will appear here after the next refresh."
+    >
+      <Inbox size={22} />
+    </EmptyState>
+  {:else}
+    <div class="triage-grid">
+      <section class="panel queue-panel">
+        <div class="panel-header">
+          <h2>Media</h2>
+          <span>{queueSummary}</span>
+        </div>
+        <div class="queue-list">
+          {#each media as item (item.id)}
+            <button
+              class="queue-item"
+              data-active={selectedId === item.id}
+              onclick={() => selectMedia(item.id)}
+            >
+              <div class="media-thumb">
+                {#if isVideoUrl(mediaUrl(item), mediaType(item))}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video class="media-item" muted preload="metadata">
+                    <source src={mediaUrl(item)} type={mediaType(item)} />
+                  </video>
+                {:else}
+                  <img
+                    class="media-item"
+                    src={mediaUrl(item)}
+                    alt={item.item_title}
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                  />
+                {/if}
+              </div>
+              <div>
+                <h2 class="queue-title">{item.item_title}</h2>
+                <div class="meta-line">
+                  <span>media {item.sort_index + 1}</span>
+                  <span class="dot-separator"></span>
+                  <span>{communityLabel(item)}</span>
+                </div>
+                <div class="meta-line" style="margin-top: 8px;">
+                  <StatusBadge value={item.illustration_label} />
+                  <span>{scorePercent(item.analysis?.illustration_score)}</span>
+                </div>
+              </div>
+            </button>
+          {/each}
+        </div>
+      </section>
+
+      {#if selectedMedia}
+        <section class="panel media-workbench">
+          <div class="selected-media-stage">
+            {#if isVideoUrl(mediaUrl(selectedMedia), mediaType(selectedMedia))}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video class="media-item" controls preload="metadata">
+                <source src={mediaUrl(selectedMedia)} type={mediaType(selectedMedia)} />
+              </video>
+            {:else}
+              <img
+                class="media-item"
+                src={mediaUrl(selectedMedia)}
+                alt={selectedMedia.item_title}
+                referrerpolicy="no-referrer"
+              />
+            {/if}
+          </div>
+          <aside class="side-panel">
+            <h2>{selectedMedia.item_title}</h2>
+            <p>
+              {communityLabel(selectedMedia)} · media {selectedMedia.sort_index + 1} · found {formatRelative(selectedMedia.discovered_at)}
+            </p>
+            <div class="actions-row">
+              <StatusBadge value={selectedMedia.approval_status} />
+              <StatusBadge value={selectedMedia.item_download_status} />
+            </div>
+
+            <div class="actions-row">
+              <button
+                class="button"
+                data-tone="primary"
+                disabled={itemBusy(selectedMedia.id)}
+                onclick={() => decideMedia(selectedMedia.id, 'approved')}
+              >
+                <Check size={16} />
+                Keep
+              </button>
+              <button
+                class="button"
+                data-tone="danger"
+                disabled={itemBusy(selectedMedia.id)}
+                onclick={() => decideMedia(selectedMedia.id, 'rejected')}
+              >
+                <X size={16} />
+                Reject
+              </button>
+              <button
+                class="button"
+                data-tone="quiet"
+                disabled={taggingActions[selectedMedia.id]}
+                onclick={() => analyzeMedia(selectedMedia.id)}
+              >
+                <Tags size={16} />
+                {taggingActions[selectedMedia.id] ? 'Tagging' : 'Tag'}
+              </button>
+            </div>
+
+            <div class="triage-section">
+              <strong>Illustration label</strong>
+              <div class="segmented-control">
+                {#each labelOptions as option}
+                  <button
+                    class="button"
+                    data-tone={selectedMedia.illustration_label === option.value ? 'primary' : 'quiet'}
+                    aria-pressed={selectedMedia.illustration_label === option.value}
+                    disabled={decisionBusy(selectedMedia.id)}
+                    onclick={() => labelMedia(selectedMedia.id, option.value)}
+                  >
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div class="triage-section">
+              <strong>Analysis</strong>
+              <div class="notice" style="align-items: flex-start;">
+                <Tags size={16} />
+                <div>
+                  <strong>Illustration {scorePercent(selectedMedia.analysis?.illustration_score)}</strong>
+                  <p>{selectedMedia.analysis?.status ?? 'not analyzed'}</p>
+                </div>
+              </div>
+            </div>
+
+            {#if sortedScores(selectedMedia.analysis?.ratings).length > 0}
+              <div class="tag-group">
+                <strong>Ratings</strong>
+                <div class="chip-row">
+                  {#each sortedScores(selectedMedia.analysis?.ratings) as [tag, score]}
+                    <span class="chip">{tag}: {scorePercent(score)}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if sortedScores(selectedMedia.analysis?.character_tags).length > 0}
+              <div class="tag-group">
+                <strong>Character</strong>
+                <div class="chip-row">
+                  {#each sortedScores(selectedMedia.analysis?.character_tags).slice(0, 10) as [tag, score]}
+                    <span class="chip">{tag}: {scorePercent(score)}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if sortedScores(selectedMedia.analysis?.general_tags).length > 0}
+              <div class="tag-group">
+                <strong>General</strong>
+                <div class="chip-row">
+                  {#each sortedScores(selectedMedia.analysis?.general_tags).slice(0, 18) as [tag, score]}
+                    <span class="chip">{tag}: {scorePercent(score)}</span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <div class="actions-row">
+              <a
+                class="button"
+                data-tone="quiet"
+                href={selectedMedia.source_url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink size={16} />
+                {sourceLabel(selectedMedia)}
+              </a>
+              <a class="button" data-tone="quiet" href="/items/{selectedMedia.item_id}">
+                Source detail
+              </a>
+            </div>
+
+            {#if selectedMedia.analyses.length > 0}
+              <div class="actions-row">
+                <button
+                  class="button"
+                  data-tone="quiet"
+                  onclick={() => {
+                    showAnalysisDetails = !showAnalysisDetails;
+                  }}
+                >
+                  {showAnalysisDetails ? 'Hide analysis details' : 'Show analysis details'}
+                </button>
+              </div>
+              {#if showAnalysisDetails}
+                <div class="analysis-stack">
+                  {#each selectedMedia.analyses as analysis}
+                    <div
+                      class="analysis-row"
+                      data-active={analysis.analysis_profile_id === selectedMedia.analysis?.analysis_profile_id}
+                    >
+                      <div>
+                        <strong>{analysis.model_name}</strong>
+                        <p>{analysis.model_version} · {analysis.scoring_version}</p>
+                      </div>
+                      <span>{scorePercent(analysis.illustration_score)}</span>
+                      <p>
+                        stored {analysis.stored_general_tag_count} general · {analysis.stored_character_tag_count} character
+                      </p>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+          </aside>
+        </section>
       {/if}
     </div>
-  </div>
-  <div class="field">
-    <span>Community</span>
-    <input
-      class="input"
-      bind:value={draftCommunity}
-      placeholder="pics"
-      onblur={commitFilters}
-      onkeydown={(event) => {
-        if (event.key === 'Enter') commitFilters();
-      }}
-    />
-  </div>
-  <div class="field">
-    <span>Author</span>
-    <input
-      class="input"
-      bind:value={draftAuthor}
-      placeholder="@handle"
-      onblur={commitFilters}
-      onkeydown={(event) => {
-        if (event.key === 'Enter') commitFilters();
-      }}
-    />
-  </div>
-  <button
-    class="button"
-    data-tone="quiet"
-    onclick={clearFilters}
-    disabled={!hasAppliedFilters && !hasDraftFilters}
-  >
-    <X size={16} />
-    Clear
-  </button>
-</div>
-
-{#if hasAppliedFilters}
-  <div class="chip-row">
-    {#if appliedDownloadStatus}<span class="chip">download: {statusLabel(appliedDownloadStatus)}</span>{/if}
-    {#if appliedSelectedSources.length > 0}
-      <span class="chip">source: {appliedSelectedSourceLabels.join(', ')}</span>
-    {/if}
-    {#if appliedCommunity}<span class="chip">community: {appliedCommunity}</span>{/if}
-    {#if appliedAuthor}<span class="chip">author: {appliedAuthor}</span>{/if}
-  </div>
-{/if}
-
-{#if actionError}
-  <div class="notice" data-tone="danger">
-    <CircleAlert size={16} />
-    {actionError}
-  </div>
-{/if}
-
-{#if loading}
-  <div class="work-grid">
-    <section class="panel queue-panel">
-      <div class="panel-header">
-        <h2>Queue</h2>
-        <span>Loading</span>
-      </div>
-      <div class="queue-list">
-        {#each Array.from({ length: 6 }) as _}
-          <div class="queue-item">
-            <div class="skeleton" style="width: 76px; height: 64px;"></div>
-            <div>
-              <div class="skeleton" style="height: 18px; margin-bottom: 10px;"></div>
-              <div class="skeleton" style="width: 70%; height: 14px;"></div>
-            </div>
-          </div>
-        {/each}
-      </div>
-    </section>
-    <section class="panel decision-panel">
-      <div class="media-stage">
-        <div class="skeleton" style="height: 420px;"></div>
-      </div>
-    </section>
-  </div>
-{:else if errorMessage}
-  <EmptyState title="Review queue did not load" body={errorMessage} />
-{:else if items.length === 0}
-  <EmptyState
-    title="Nothing needs review"
-    body="New under-review items will appear here after the next refresh."
-  >
-    <Inbox size={22} />
-  </EmptyState>
-{:else}
-  <div class="work-grid">
-    <section class="panel queue-panel">
-      <div class="panel-header">
-        <h2>Queue</h2>
-        <span>{items.length} pending</span>
-      </div>
-      <div class="queue-list">
-        {#each items as item (item.id)}
-          <button
-            class="queue-item"
-            data-active={selectedId === item.id}
-            onclick={() => selectItem(item.id)}
-          >
-            <MediaPreview {item} compact />
-            <div>
-              <h2 class="queue-title">{item.title}</h2>
-              <div class="meta-line">
-                <span>{communityLabel(item)}</span>
-                <span class="dot-separator"></span>
-                <span>{item.media_count} file{item.media_count === 1 ? '' : 's'}</span>
-              </div>
-              <div class="meta-line" style="margin-top: 8px;">
-                <StatusBadge value={item.download_status} />
-              </div>
-            </div>
-          </button>
-        {/each}
-      </div>
-    </section>
-
-    <section class="panel decision-panel">
-      {#if selectedItem}
-        <ItemDecisionPanel
-          item={selectedItem}
-          detail={selectedDetail}
-          heading={selectedItem.title}
-          meta={`${communityLabel(selectedItem)} · ${selectedItem.item_kind} · discovered ${formatRelative(selectedItem.discovered_at)}`}
-          loadingMessage={selectedIsLoading ? 'Loading full item data' : null}
-        >
-          {#snippet actions()}
-            <button
-              class="button"
-              data-tone="primary"
-              disabled={itemBusy(selectedItem.id)}
-              onclick={() => actOnItem(selectedItem.id, 'approve')}
-            >
-              <Check size={16} />
-              Approve
-            </button>
-            <button
-              class="button"
-              data-tone="danger"
-              disabled={itemBusy(selectedItem.id)}
-              onclick={() => actOnItem(selectedItem.id, 'reject')}
-            >
-              <X size={16} />
-              Reject
-            </button>
-            <button
-              class="button"
-              data-tone="quiet"
-              disabled={itemBusy(selectedItem.id)}
-              onclick={() => analyzeSelectedItem(selectedItem.id)}
-            >
-              <Tags size={16} />
-              {taggingActions[selectedItem.id] ? 'Tagging' : 'Tag'}
-            </button>
-            {#if selectedItem.community_name}
-              <button
-                class="button"
-                data-tone="warning"
-                disabled={itemBusy(selectedItem.id)}
-                onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_community')}
-              >
-                <Ban size={16} />
-                Blacklist Community
-              </button>
-            {/if}
-            {#if selectedItem.author_name}
-              <button
-                class="button"
-                data-tone="warning"
-                disabled={itemBusy(selectedItem.id)}
-                onclick={() => actOnItem(selectedItem.id, 'reject_blacklist_author')}
-              >
-                <Ban size={16} />
-                Blacklist Author
-              </button>
-            {/if}
-          {/snippet}
-        </ItemDecisionPanel>
-      {/if}
-    </section>
-  </div>
-{/if}
+  {/if}
 </div>

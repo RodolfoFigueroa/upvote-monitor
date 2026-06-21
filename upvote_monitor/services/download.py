@@ -12,6 +12,11 @@ from upvote_monitor.db.models import AppSettings, MediaAttachment, ReviewItem
 from upvote_monitor.enums import ApprovalStatus, DownloadStatus, DownloadStrategy
 from upvote_monitor.functions import download_file_from_url
 from upvote_monitor.services.event_bus import broadcast
+from upvote_monitor.services.media_workflow import (
+    approval_status_api,
+    approved_media_attachments,
+    item_has_under_review_media,
+)
 
 
 @dataclass
@@ -44,26 +49,21 @@ def get_preview_urls(session: Session, item_id: str) -> list[str]:
     ]
 
 
-def _approval_status_api(status: ApprovalStatus) -> str:
-    return {
-        ApprovalStatus.REJECTED: "rejected",
-        ApprovalStatus.APPROVED: "approved",
-        ApprovalStatus.UNDER_REVIEW: "under_review",
-    }[status]
-
-
 def _broadcast_item_updated(item: ReviewItem) -> None:
     broadcast(
         "item_updated",
         {
             "item_id": item.id,
             "download_status": item.download_status.value,
-            "approval_status": _approval_status_api(item.approval_status),
+            "approval_status": approval_status_api(item.approval_status),
         },
     )
 
 
 def claim_item_for_download(session: Session, item_id: str) -> ReviewItem | None:
+    if item_has_under_review_media(session, item_id):
+        return None
+
     result: Any = session.exec(
         update(ReviewItem)
         .where(col(ReviewItem.id) == item_id)
@@ -109,7 +109,10 @@ def _download_claimed_item(
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        attachments = get_media_attachments(session, item.id)
+        attachments = approved_media_attachments(session, item.id)
+        if not attachments:
+            raise RuntimeError("Item has no kept media to download")
+
         for attachment in attachments:
             target_path = target_dir / f"{attachment.sort_index:02d}"
             _download_attachment_to_path(attachment, target_path)

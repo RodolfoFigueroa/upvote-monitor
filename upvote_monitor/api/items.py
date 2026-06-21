@@ -23,10 +23,10 @@ from upvote_monitor.services.download import get_preview_urls, run_download_back
 from upvote_monitor.services.preview_cache import (
     PreviewCacheFetchError,
     PreviewCacheNotFound,
-    delete_item_preview_cache,
     get_or_fetch_cached_preview,
     preview_media_type,
 )
+from upvote_monitor.services.media_workflow import set_item_media_approval
 from upvote_monitor.services.tagging.analysis import (
     TaggerUnavailableError,
     analyze_item,
@@ -159,11 +159,9 @@ def approve_item(
     session: Session = Depends(get_db_session),
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
-    item.approval_status = ApprovalStatus.APPROVED
-    session.add(item)
+    item = set_item_media_approval(session, item, ApprovalStatus.APPROVED)
     session.commit()
     session.refresh(item)
-    delete_item_preview_cache(item.id)
 
     if item.download_status in (DownloadStatus.PENDING, DownloadStatus.FAILED):
         background_tasks.add_task(run_download_background, item_id)
@@ -176,11 +174,9 @@ def reject_item(
     session: Session = Depends(get_db_session),
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
-    item.approval_status = ApprovalStatus.REJECTED
-    session.add(item)
+    item = set_item_media_approval(session, item, ApprovalStatus.REJECTED)
     session.commit()
     session.refresh(item)
-    delete_item_preview_cache(item.id)
     return ItemDetail.from_db(item, session)
 
 

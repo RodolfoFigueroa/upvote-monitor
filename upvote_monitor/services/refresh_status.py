@@ -34,12 +34,18 @@ def broadcast_review_queue_changed(
     source: str | None = None,
     target_type: str | None = None,
     target_value: str | None = None,
+    media_id: int | None = None,
+    reason: str | None = None,
 ) -> None:
-    data: dict[str, str] = {}
+    data: dict[str, int | str] = {}
     if source is not None:
         data["source"] = source
     if target_type is not None:
         data["target_type"] = target_type
     if target_value is not None:
         data["target_value"] = target_value
+    if media_id is not None:
+        data["media_id"] = media_id
+    if reason is not None:
+        data["reason"] = reason
     broadcast("review_queue_changed", data)

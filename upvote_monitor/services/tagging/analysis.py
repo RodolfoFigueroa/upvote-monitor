@@ -17,10 +17,10 @@ from upvote_monitor.db.models import (
 )
 from upvote_monitor.enums import AnalysisStatus, ApprovalStatus
 from upvote_monitor.services.preview_cache import (
-    delete_item_preview_cache,
     get_or_fetch_cached_preview,
     is_cacheable_preview_url,
 )
+from upvote_monitor.services.media_workflow import set_media_decision
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.profiles import active_analysis_profile
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult, get_wd_tagger
@@ -110,7 +110,9 @@ def analyze_item(
 ) -> AnalysisBatchResult:
     profile = active_analysis_profile(session)
     if profile is None:
-        raise TaggerUnavailableError("No active illustration analysis profile is configured")
+        raise TaggerUnavailableError(
+            "No active illustration analysis profile is configured"
+        )
 
     if tagger is None:
         tagger = _default_tagger(profile)
@@ -125,6 +127,38 @@ def analyze_item(
     )
     session.commit()
     return result
+
+
+def analyze_attachment(
+    session: Session,
+    attachment: MediaAttachment,
+    tagger: ImageTagger | None = None,
+) -> MediaAnalysis:
+    profile = active_analysis_profile(session)
+    if profile is None:
+        raise TaggerUnavailableError(
+            "No active illustration analysis profile is configured"
+        )
+
+    item = session.get(ReviewItem, attachment.item_id)
+    if item is None:
+        raise TaggerUnavailableError("Media item source post could not be found")
+
+    if tagger is None:
+        tagger = _default_tagger(profile)
+
+    existing = (
+        _existing_analysis(session, attachment.id, profile) if attachment.id else None
+    )
+    analysis = _analyze_attachment(item, attachment, profile, tagger)
+    if existing is not None:
+        _replace_analysis(existing, analysis)
+        analysis = existing
+    else:
+        session.add(analysis)
+
+    session.commit()
+    return analysis
 
 
 def get_attachment_analysis(
@@ -218,24 +252,6 @@ def _image_attachments_for_item(
     )
 
 
-def _existing_item_scores(
-    session: Session,
-    item_id: str,
-    profile: AnalysisProfile,
-) -> list[float]:
-    rows = session.exec(
-        select(MediaAnalysis)
-        .join(
-            MediaAttachment,
-            col(MediaAttachment.id) == col(MediaAnalysis.attachment_id),
-        )
-        .where(MediaAttachment.item_id == item_id)
-        .where(MediaAnalysis.analysis_profile_id == profile.id)
-        .where(MediaAnalysis.status == AnalysisStatus.COMPLETED)
-    ).all()
-    return [row.illustration_score for row in rows if row.illustration_score is not None]
-
-
 def _analyze_item(
     session: Session,
     item: ReviewItem,
@@ -246,7 +262,6 @@ def _analyze_item(
     auto_approve_threshold: float | None,
 ) -> AnalysisBatchResult:
     result = AnalysisBatchResult()
-    scores = _existing_item_scores(session, item.id, profile) if not force else []
     attachments = _image_attachments_for_item(session, item.id)
 
     for attachment in attachments:
@@ -254,6 +269,13 @@ def _analyze_item(
             continue
         existing = _existing_analysis(session, attachment.id, profile)
         if existing is not None and not force:
+            if _maybe_auto_approve_attachment(
+                session,
+                attachment,
+                existing.illustration_score,
+                auto_approve_threshold,
+            ):
+                result.approved += 1
             continue
 
         analysis = _analyze_attachment(
@@ -270,21 +292,17 @@ def _analyze_item(
 
         if analysis.status == AnalysisStatus.COMPLETED:
             result.analyzed += 1
-            if analysis.illustration_score is not None:
-                scores.append(analysis.illustration_score)
+            if _maybe_auto_approve_attachment(
+                session,
+                attachment,
+                analysis.illustration_score,
+                auto_approve_threshold,
+            ):
+                result.approved += 1
         elif analysis.status == AnalysisStatus.SKIPPED:
             result.skipped += 1
         elif analysis.status == AnalysisStatus.FAILED:
             result.failed += 1
-
-    if auto_approve_threshold is not None and _maybe_auto_approve_item(
-        item,
-        scores,
-        auto_approve_threshold,
-    ):
-        session.add(item)
-        delete_item_preview_cache(item.id)
-        result.approved += 1
 
     return result
 
@@ -407,24 +425,31 @@ def _filter_scores(
 ) -> dict[str, float]:
     return {
         name: round(float(score), 4)
-        for name, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        for name, score in sorted(
+            scores.items(), key=lambda item: item[1], reverse=True
+        )
         if score >= threshold
     }
 
 
-def _maybe_auto_approve_item(
-    item: ReviewItem,
-    scores: list[float],
-    threshold: float,
+def _maybe_auto_approve_attachment(
+    session: Session,
+    attachment: MediaAttachment,
+    score: float | None,
+    threshold: float | None,
 ) -> bool:
-    if item.approval_status != ApprovalStatus.UNDER_REVIEW:
+    if threshold is None:
         return False
-    if not scores:
+    if attachment.approval_status != ApprovalStatus.UNDER_REVIEW:
         return False
-    if max(scores) < threshold:
+    if score is None or score < threshold:
         return False
 
-    item.approval_status = ApprovalStatus.APPROVED
+    set_media_decision(
+        session,
+        attachment,
+        approval_status=ApprovalStatus.APPROVED,
+    )
     return True
 
 

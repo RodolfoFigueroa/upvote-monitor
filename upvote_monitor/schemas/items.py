@@ -10,13 +10,19 @@ from upvote_monitor.db.models import (
     MediaAttachment,
     ReviewItem,
 )
-from upvote_monitor.enums import ApprovalStatus
+from upvote_monitor.services.media_workflow import (
+    approval_status_api,
+    attachment_counts,
+)
 from upvote_monitor.services.download import (
     get_media_attachments,
     get_preview_urls,
     get_source_urls,
 )
-from upvote_monitor.services.preview_cache import localize_preview_urls
+from upvote_monitor.services.preview_cache import (
+    localize_preview_url,
+    localize_preview_urls,
+)
 from upvote_monitor.services.tagging.analysis import (
     get_attachment_analysis,
     get_attachment_analyses,
@@ -28,15 +34,9 @@ from upvote_monitor.services.tagging.profiles import (
 )
 
 
-def _approval_status_api(status: ApprovalStatus) -> str:
-    return {
-        ApprovalStatus.REJECTED: "rejected",
-        ApprovalStatus.APPROVED: "approved",
-        ApprovalStatus.UNDER_REVIEW: "under_review",
-    }[status]
-
-
 class MediaAttachmentResponse(BaseModel):
+    id: int
+    item_id: str
     sort_index: int
     media_type: str
     content_type: str | None
@@ -47,6 +47,8 @@ class MediaAttachmentResponse(BaseModel):
     duration_ms: int | None
     extension: str | None
     download_strategy: str
+    approval_status: str
+    illustration_label: str
     analysis: "MediaAnalysisResponse | None" = None
     analyses: list["MediaAnalysisResponse"] = Field(default_factory=list)
 
@@ -56,7 +58,10 @@ class MediaAttachmentResponse(BaseModel):
         attachment: MediaAttachment,
         session: Session,
     ) -> "MediaAttachmentResponse":
+        assert attachment.id is not None
         return cls(
+            id=attachment.id,
+            item_id=attachment.item_id,
             sort_index=attachment.sort_index,
             media_type=attachment.media_type,
             content_type=attachment.content_type,
@@ -67,6 +72,8 @@ class MediaAttachmentResponse(BaseModel):
             duration_ms=attachment.duration_ms,
             extension=attachment.extension,
             download_strategy=attachment.download_strategy.value,
+            approval_status=approval_status_api(attachment.approval_status),
+            illustration_label=attachment.illustration_label.value,
             analysis=MediaAnalysisResponse.from_db(
                 get_attachment_analysis(session, attachment.id),
                 session,
@@ -163,11 +170,16 @@ class ItemSummary(BaseModel):
     preview_urls: list[str]
     analysis_status: str | None
     illustration_score: float | None
+    media_approved_count: int
+    media_rejected_count: int
+    media_under_review_count: int
+    media_unlabeled_count: int
 
     @classmethod
     def from_db(cls, item: ReviewItem, session: Session) -> "ItemSummary":
         preview_urls = get_preview_urls(session, item.id)
         analysis = get_item_analysis_summary(session, item.id)
+        counts = attachment_counts(session, item.id)
         return cls(
             id=item.id,
             source=item.source,
@@ -178,7 +190,7 @@ class ItemSummary(BaseModel):
             community_name=item.community_name,
             community_label=item.community_label,
             item_kind=item.item_kind,
-            approval_status=_approval_status_api(item.approval_status),
+            approval_status=approval_status_api(item.approval_status),
             download_status=item.download_status.value,
             created_at=item.created_at,
             source_url=item.source_url,
@@ -192,6 +204,10 @@ class ItemSummary(BaseModel):
             ),
             analysis_status=analysis.status,
             illustration_score=analysis.illustration_score,
+            media_approved_count=counts.approved,
+            media_rejected_count=counts.rejected,
+            media_under_review_count=counts.under_review,
+            media_unlabeled_count=counts.unlabeled,
         )
 
 
@@ -219,6 +235,104 @@ class ItemListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class MediaItemResponse(BaseModel):
+    id: int
+    item_id: str
+    item_title: str
+    source: str
+    source_item_id: str
+    source_url: str
+    author_name: str | None
+    author_label: str | None
+    community_name: str | None
+    community_label: str | None
+    item_kind: str
+    item_created_at: datetime
+    discovered_at: datetime
+    item_approval_status: str
+    item_download_status: str
+    sort_index: int
+    media_type: str
+    content_type: str | None
+    download_url: str
+    preview_url: str | None
+    width: int | None
+    height: int | None
+    duration_ms: int | None
+    extension: str | None
+    download_strategy: str
+    approval_status: str
+    illustration_label: str
+    analysis: MediaAnalysisResponse | None = None
+    analyses: list[MediaAnalysisResponse] = Field(default_factory=list)
+
+    @classmethod
+    def from_db(
+        cls,
+        attachment: MediaAttachment,
+        item: ReviewItem,
+        session: Session,
+    ) -> "MediaItemResponse":
+        assert attachment.id is not None
+        preview_url = attachment.preview_url or attachment.download_url
+        localized_preview_url = localize_preview_url(
+            item.id,
+            item.approval_status,
+            attachment.sort_index,
+            preview_url,
+        )
+        return cls(
+            id=attachment.id,
+            item_id=item.id,
+            item_title=item.title,
+            source=item.source,
+            source_item_id=item.source_item_id,
+            source_url=item.source_url,
+            author_name=item.author_name,
+            author_label=item.author_label,
+            community_name=item.community_name,
+            community_label=item.community_label,
+            item_kind=item.item_kind,
+            item_created_at=item.created_at,
+            discovered_at=item.discovered_at,
+            item_approval_status=approval_status_api(item.approval_status),
+            item_download_status=item.download_status.value,
+            sort_index=attachment.sort_index,
+            media_type=attachment.media_type,
+            content_type=attachment.content_type,
+            download_url=attachment.download_url,
+            preview_url=localized_preview_url,
+            width=attachment.width,
+            height=attachment.height,
+            duration_ms=attachment.duration_ms,
+            extension=attachment.extension,
+            download_strategy=attachment.download_strategy.value,
+            approval_status=approval_status_api(attachment.approval_status),
+            illustration_label=attachment.illustration_label.value,
+            analysis=MediaAnalysisResponse.from_db(
+                get_attachment_analysis(session, attachment.id),
+                session,
+            ),
+            analyses=[
+                MediaAnalysisResponse.from_analysis(analysis, session)
+                for analysis in get_attachment_analyses(session, attachment.id)
+            ],
+        )
+
+
+class MediaListResponse(BaseModel):
+    media: list[MediaItemResponse]
+    total: int
+    limit: int
+    offset: int
+    next_cursor: str | None = None
+
+
+class MediaUpdate(BaseModel):
+    approval_status: str | None = None
+    illustration_label: str | None = None
 
 
 class ItemFile(BaseModel):
@@ -254,6 +368,8 @@ def _filter_scores(
 ) -> dict[str, float]:
     return {
         name: score
-        for name, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        for name, score in sorted(
+            scores.items(), key=lambda item: item[1], reverse=True
+        )
         if score >= threshold
     }

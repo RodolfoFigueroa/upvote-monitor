@@ -73,13 +73,23 @@ def localize_preview_urls(
     approval_status: ApprovalStatus,
     preview_urls: list[str],
 ) -> list[str]:
-    if approval_status != ApprovalStatus.UNDER_REVIEW:
-        return preview_urls
-
     return [
-        cached_preview_url(item_id, index) if is_cacheable_preview_url(url) else url
+        localize_preview_url(item_id, approval_status, index, url)
         for index, url in enumerate(preview_urls)
     ]
+
+
+def localize_preview_url(
+    item_id: str,
+    approval_status: ApprovalStatus,
+    index: int,
+    preview_url: str,
+) -> str:
+    if approval_status != ApprovalStatus.UNDER_REVIEW:
+        return preview_url
+    if not is_cacheable_preview_url(preview_url):
+        return preview_url
+    return cached_preview_url(item_id, index)
 
 
 def delete_item_preview_cache(item_id: str) -> None:

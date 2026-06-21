@@ -95,6 +95,10 @@
     );
   }
 
+  function mediaCountsLabel(item: ItemSummary): string {
+    return `${item.media_approved_count} kept · ${item.media_rejected_count} rejected · ${item.media_under_review_count} pending`;
+  }
+
   function filtersChanged() {
     return (
       appliedApprovalStatus !== draftApprovalStatus ||
@@ -368,7 +372,7 @@
 {#if loading}
   <section class="panel item-table">
     <div class="item-row" data-head="true">
-      <span>Item</span><span>Community</span><span>Approval</span><span>Download</span><span>Created</span>
+      <span>Item</span><span>Community</span><span>Media</span><span>Approval</span><span>Download</span><span>Created</span>
     </div>
     {#each Array.from({ length: 8 }) as _}
       <div class="item-row">
@@ -398,6 +402,7 @@
     <div class="item-row" data-head="true">
       <span>Item</span>
       <span>Community</span>
+      <span>Media</span>
       <span>Approval</span>
       <span>Download</span>
       <span>Created</span>
@@ -417,6 +422,7 @@
           </div>
         </div>
         <div class="meta-line">{communityLabel(item)}</div>
+        <div class="meta-line">{mediaCountsLabel(item)}</div>
         <div><StatusBadge value={item.approval_status} /></div>
         <div><StatusBadge value={item.download_status} /></div>
         <div class="meta-line">{formatDate(item.created_at)}</div>
