@@ -2,6 +2,8 @@
 
 This document summarizes current image tagger options for Upvote Monitor's 2D illustration workflow. The goal is to choose models that can run locally on self-hosted systems, generate useful tags, and support an `illustration_score` for auto-approval rules.
 
+Related: [`image-understanding-models.md`](./image-understanding-models.md) covers CLIP-like embedding models, captioning models, and small VLMs that can complement these taggers for broader medium classification.
+
 ## Requirements
 
 - Self-hostable inference, preferably with ONNX Runtime.
