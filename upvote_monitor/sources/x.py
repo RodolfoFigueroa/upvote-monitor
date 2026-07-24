@@ -152,7 +152,8 @@ def _request_json(
     if isinstance(data, dict) and data.get("errors"):
         raise XSourceError(f"X returned GraphQL errors: {data['errors']}")
     if not isinstance(data, dict):
-        raise XSourceError("X returned an unexpected response shape")
+        msg = "X returned an unexpected response shape"
+        raise XSourceError(msg)
     return data
 
 
@@ -225,7 +226,8 @@ def _authenticated_user(session: requests.Session) -> tuple[str, str]:
 
     screen_name = settings.get("screen_name")
     if not screen_name:
-        raise XSourceError("X account settings did not include a screen_name")
+        msg = "X account settings did not include a screen_name"
+        raise XSourceError(msg)
     return _user_by_screen_name(session, str(screen_name))
 
 
@@ -239,7 +241,8 @@ def validate_x_credentials(
 ) -> None:
     twid_user_id = user_id_from_twid(twid)
     if twid_user_id is None:
-        raise XSourceError("X twid cookie did not contain a user id")
+        msg = "X twid cookie did not contain a user id"
+        raise XSourceError(msg)
 
     session = _build_session(
         auth_token=auth_token,
@@ -408,20 +411,14 @@ def source_item_from_raw_tweet(tweet_data: dict[str, Any]) -> SourceItem | None:
     normalized_screen_name = str(screen_name).lower() if screen_name else None
     display_name = user_legacy.get("name")
     note_result = (
-        tweet_data.get("note_tweet", {})
-        .get("note_tweet_results", {})
-        .get("result", {})
+        tweet_data.get("note_tweet", {}).get("note_tweet_results", {}).get("result", {})
     )
     text = (
         note_result.get("text") if isinstance(note_result, dict) else None
     ) or legacy.get("full_text")
     title = str(text or "")
     if not title:
-        title = (
-            f"X post by @{screen_name}"
-            if screen_name
-            else f"X post {tweet_id}"
-        )
+        title = f"X post by @{screen_name}" if screen_name else f"X post {tweet_id}"
 
     attachments: list[MediaAttachmentInput] = []
     x_media_types: list[str] = []

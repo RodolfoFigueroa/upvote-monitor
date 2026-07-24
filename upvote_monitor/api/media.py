@@ -337,9 +337,9 @@ def analyze_media(
 
     session.refresh(attachment)
     session.refresh(item)
-    if (
-        item.approval_status == ApprovalStatus.APPROVED
-        and item.download_status in (DownloadStatus.PENDING, DownloadStatus.FAILED)
+    if item.approval_status == ApprovalStatus.APPROVED and item.download_status in (
+        DownloadStatus.PENDING,
+        DownloadStatus.FAILED,
     ):
         background_tasks.add_task(run_download_background, item.id)
     return MediaItemResponse.from_db(attachment, item, session)

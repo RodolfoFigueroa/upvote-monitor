@@ -114,9 +114,8 @@ def analyze_item(
 ) -> AnalysisBatchResult:
     profile = active_analysis_profile(session)
     if profile is None:
-        raise TaggerUnavailableError(
-            "No active illustration analysis profile is configured"
-        )
+        msg = "No active illustration analysis profile is configured"
+        raise TaggerUnavailableError(msg)
 
     if tagger is None:
         tagger = _default_tagger(profile)
@@ -140,13 +139,13 @@ def analyze_attachment(
 ) -> MediaAnalysis:
     profile = active_analysis_profile(session)
     if profile is None:
-        raise TaggerUnavailableError(
-            "No active illustration analysis profile is configured"
-        )
+        msg = "No active illustration analysis profile is configured"
+        raise TaggerUnavailableError(msg)
 
     item = session.get(ReviewItem, attachment.item_id)
     if item is None:
-        raise TaggerUnavailableError("Media item source post could not be found")
+        msg = "Media item source post could not be found"
+        raise TaggerUnavailableError(msg)
 
     if tagger is None:
         tagger = _default_tagger(profile)
@@ -463,6 +462,5 @@ def _default_tagger(profile: AnalysisProfile) -> ImageTagger:
             return get_pixai_tagger(profile.model_name, profile.model_version)
         return get_wd_tagger(profile.model_name, profile.model_version)
     except Exception as exc:
-        raise TaggerUnavailableError(
-            "Illustration tagger could not be initialized"
-        ) from exc
+        msg = "Illustration tagger could not be initialized"
+        raise TaggerUnavailableError(msg) from exc

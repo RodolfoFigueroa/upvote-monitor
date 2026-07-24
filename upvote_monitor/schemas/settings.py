@@ -26,7 +26,9 @@ def _reddit_username_from_secret_store(secret_store: SecretStore) -> str:
     if not secret_store.available:
         return ""
     try:
-        return secret_store.get_source_secrets(REDDIT_SOURCE).get("username", "").strip()
+        return (
+            secret_store.get_source_secrets(REDDIT_SOURCE).get("username", "").strip()
+        )
     except (SecretStoreInvalid, SecretStoreUnavailable):
         return ""
 
@@ -301,7 +303,8 @@ class SettingsUpdate(BaseModel):
             try:
                 CronTrigger.from_crontab(value)
             except ValueError as exc:
-                raise ValueError("refresh_cron must be a valid crontab") from exc
+                msg = "refresh_cron must be a valid crontab"
+                raise ValueError(msg) from exc
         return value
 
     @field_validator("download_base_dir")
@@ -311,5 +314,6 @@ class SettingsUpdate(BaseModel):
             from pathlib import Path
 
             if not Path(value).is_absolute():
-                raise ValueError("download_base_dir must be an absolute path")
+                msg = "download_base_dir must be an absolute path"
+                raise ValueError(msg)
         return value

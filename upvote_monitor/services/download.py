@@ -142,7 +142,9 @@ def run_download_background(item_id: str, *, ignore_ready_at: bool = False) -> N
         settings = session.get(AppSettings, 1)
         if settings is None:
             return
-        item = claim_item_for_download(session, item_id, ignore_ready_at=ignore_ready_at)
+        item = claim_item_for_download(
+            session, item_id, ignore_ready_at=ignore_ready_at
+        )
         if item is None:
             return
         _download_claimed_item(session, item, settings.download_base_dir)
@@ -159,7 +161,8 @@ def _download_claimed_item(
         target_dir.mkdir(parents=True, exist_ok=True)
         attachments = approved_media_attachments(session, item.id)
         if not attachments:
-            raise RuntimeError("Item has no kept media to download")
+            msg = "Item has no kept media to download"
+            raise RuntimeError(msg)
 
         for attachment in attachments:
             target_path = target_dir / f"{attachment.sort_index:02d}"
@@ -208,7 +211,8 @@ def process_pending_downloads(
 ) -> DownloadBatchResult:
     settings = session.get(AppSettings, 1)
     if settings is None:
-        raise RuntimeError("App settings not initialized")
+        msg = "App settings not initialized"
+        raise RuntimeError(msg)
 
     items = session.exec(
         select(ReviewItem.id).where(

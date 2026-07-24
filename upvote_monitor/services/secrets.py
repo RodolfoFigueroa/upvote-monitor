@@ -110,12 +110,14 @@ class SecretStore:
         try:
             plaintext = fernet.decrypt(self.path.read_bytes())
         except InvalidToken as exc:
-            raise SecretStoreInvalid("Encrypted secrets could not be decrypted") from exc
+            msg = "Encrypted secrets could not be decrypted"
+            raise SecretStoreInvalid(msg) from exc
 
         try:
             value = json.loads(plaintext.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            raise SecretStoreInvalid("Encrypted secrets are not valid JSON") from exc
+            msg = "Encrypted secrets are not valid JSON"
+            raise SecretStoreInvalid(msg) from exc
         return value if isinstance(value, dict) else {}
 
     def write_all(self, data: dict[str, Any]) -> None:
@@ -126,6 +128,7 @@ class SecretStore:
 
     def _fernet(self) -> Fernet:
         if not self._secret_key:
-            raise SecretStoreUnavailable("UPVOTE_MONITOR_SECRET_KEY is not configured")
+            msg = "UPVOTE_MONITOR_SECRET_KEY is not configured"
+            raise SecretStoreUnavailable(msg)
         digest = sha256(self._secret_key.encode("utf-8")).digest()
         return Fernet(base64.urlsafe_b64encode(digest))

@@ -178,9 +178,8 @@ class _BaseChildData(StrictBaseModel, ABC):
 
     def download_to_path(self, path: os.PathLike | str) -> None:
         if len(self.media_download_url) != 1:
-            raise ValueError(
-                "More than one media download URL detected. Use download_to_dir instead."
-            )
+            msg = "More than one media download URL detected. Use download_to_dir instead."
+            raise ValueError(msg)
 
         self._download_to_path(self.media_download_url[0], path)
 

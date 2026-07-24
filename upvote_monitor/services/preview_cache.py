@@ -136,7 +136,8 @@ def preview_media_type(path: Path) -> str:
 
 def get_or_fetch_cached_preview(item_id: str, index: int, remote_url: str) -> Path:
     if not is_cacheable_preview_url(remote_url):
-        raise PreviewCacheNotFound("Preview URL is not cacheable")
+        msg = "Preview URL is not cacheable"
+        raise PreviewCacheNotFound(msg)
 
     cached = find_cached_preview_file(item_id, index)
     if cached is not None:
@@ -177,13 +178,15 @@ def _fetch_preview(item_id: str, index: int, remote_url: str) -> Path:
         )
         extension = IMAGE_CONTENT_TYPES.get(content_type)
         if extension is None:
-            raise PreviewCacheFetchError("Preview response is not an image")
+            msg = "Preview response is not an image"
+            raise PreviewCacheFetchError(msg)
 
         content_length = response.headers.get("Content-Length")
         if content_length is not None:
             try:
                 if int(content_length) > MAX_PREVIEW_BYTES:
-                    raise PreviewCacheFetchError("Preview response is too large")
+                    msg = "Preview response is too large"
+                    raise PreviewCacheFetchError(msg)
             except ValueError:
                 pass
 
@@ -201,7 +204,8 @@ def _fetch_preview(item_id: str, index: int, remote_url: str) -> Path:
                         continue
                     total += len(chunk)
                     if total > MAX_PREVIEW_BYTES:
-                        raise PreviewCacheFetchError("Preview response is too large")
+                        msg = "Preview response is too large"
+                        raise PreviewCacheFetchError(msg)
                     file.write(chunk)
             temp_path.replace(target_path)
         finally:

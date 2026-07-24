@@ -182,7 +182,8 @@ def ingest_items(
 ) -> IngestResult:
     settings = session.get(AppSettings, 1)
     if settings is None:
-        raise RuntimeError("App settings not initialized")
+        msg = "App settings not initialized"
+        raise RuntimeError(msg)
 
     whitelist, blacklist = load_rule_sets(session)
     existing_keys = _existing_source_keys(session)

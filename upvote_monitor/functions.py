@@ -17,7 +17,8 @@ def download_file_from_url(
     path = Path(path)
 
     if path.suffix != "":
-        raise ValueError("Path must not have a suffix")
+        msg = "Path must not have a suffix"
+        raise ValueError(msg)
 
     response = requests.get(url, timeout=REQUESTS_TIMEOUT)
     response.raise_for_status()

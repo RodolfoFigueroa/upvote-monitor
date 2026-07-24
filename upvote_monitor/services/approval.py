@@ -116,7 +116,8 @@ def recompute_pending_items_for_rule(
 ) -> RecomputePendingItemsResult:
     settings = session.get(AppSettings, 1)
     if settings is None:
-        raise RuntimeError("App settings not initialized")
+        msg = "App settings not initialized"
+        raise RuntimeError(msg)
 
     normalized = normalize_rule_target(source, target_type, target_value)
     whitelist, blacklist = load_rule_sets(session)

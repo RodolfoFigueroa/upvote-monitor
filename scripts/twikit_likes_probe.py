@@ -170,7 +170,8 @@ def normalize_cookies(raw: Any) -> dict[str, str]:
                 normalized[str(name)] = str(value)
         return normalized
 
-    raise ValueError("cookies must be a JSON object or a browser-export JSON list")
+    msg = "cookies must be a JSON object or a browser-export JSON list"
+    raise ValueError(msg)
 
 
 def load_cookies(args: argparse.Namespace) -> dict[str, str]:
@@ -179,7 +180,10 @@ def load_cookies(args: argparse.Namespace) -> dict[str, str]:
     elif args.cookies_file:
         raw = json.loads(Path(args.cookies_file).read_text(encoding="utf-8"))
     else:
-        raise ValueError("provide --cookies-file, --cookies-json, X_COOKIES_FILE, or X_COOKIES_JSON")
+        msg = (
+            "provide --cookies-file, --cookies-json, X_COOKIES_FILE, or X_COOKIES_JSON"
+        )
+        raise ValueError(msg)
 
     cookies = normalize_cookies(raw)
     missing = {"auth_token", "ct0"} - cookies.keys()
@@ -202,7 +206,11 @@ def user_id_from_twid(cookies: dict[str, str]) -> str | None:
 def flatten_params(params: dict[str, Any]) -> dict[str, str]:
     flattened = {}
     for key, value in params.items():
-        flattened[key] = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)
+        flattened[key] = (
+            json.dumps(value, separators=(",", ":"))
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
     return flattened
 
 
@@ -247,7 +255,9 @@ def get_json(
     try:
         data = response.json()
     except requests.JSONDecodeError as exc:
-        raise RuntimeError(f"X returned non-JSON response with status {response.status_code}") from exc
+        raise RuntimeError(
+            f"X returned non-JSON response with status {response.status_code}"
+        ) from exc
 
     if response.status_code >= 400:
         raise RuntimeError(f"X returned HTTP {response.status_code}: {data}")
@@ -290,7 +300,8 @@ def authenticated_user(session: requests.Session) -> tuple[str, str]:
 
     screen_name = settings.get("screen_name")
     if not screen_name:
-        raise RuntimeError("X account settings did not include a screen_name")
+        msg = "X account settings did not include a screen_name"
+        raise RuntimeError(msg)
     return user_by_screen_name(session, screen_name)
 
 
@@ -346,7 +357,8 @@ def raw_media_to_dict(media: dict[str, Any], sort_index: int) -> dict[str, Any] 
     variants = [
         variant
         for variant in video_info.get("variants", [])
-        if (variant.get("content_type") or "").startswith("video") and variant.get("url")
+        if (variant.get("content_type") or "").startswith("video")
+        and variant.get("url")
     ]
     if not variants:
         return None
@@ -372,9 +384,7 @@ def raw_tweet_to_dict(tweet_data: dict[str, Any]) -> dict[str, Any]:
     tweet_id = str(tweet_data.get("rest_id") or legacy.get("id_str"))
     screen_name = user_legacy.get("screen_name")
     note_result = (
-        tweet_data.get("note_tweet", {})
-        .get("note_tweet_results", {})
-        .get("result", {})
+        tweet_data.get("note_tweet", {}).get("note_tweet_results", {}).get("result", {})
     )
     text = note_result.get("text") or legacy.get("full_text") or ""
     media_entries = (
@@ -385,7 +395,8 @@ def raw_tweet_to_dict(tweet_data: dict[str, Any]) -> dict[str, Any]:
     media = [
         media_dict
         for index, entry in enumerate(media_entries)
-        if isinstance(entry, dict) and (media_dict := raw_media_to_dict(entry, index)) is not None
+        if isinstance(entry, dict)
+        and (media_dict := raw_media_to_dict(entry, index)) is not None
     ]
     return {
         "source": "x",
@@ -414,7 +425,9 @@ def extract_cursor(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def tweets_from_likes_response(data: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+def tweets_from_likes_response(
+    data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
     instructions_list = find_values(data, "instructions")
     if not instructions_list:
         return [], None
@@ -534,7 +547,9 @@ def main() -> int:
     try:
         payload = fetch_likes(args)
     except Exception as exc:  # noqa: BLE001 - this probe should show auth/API breakage plainly.
-        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2))
+        print(
+            json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2)
+        )
         return 2
 
     print(json.dumps({"ok": True, **payload}, indent=2))

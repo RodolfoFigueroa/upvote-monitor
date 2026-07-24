@@ -82,9 +82,9 @@ def recompute_item_approval_status(session: Session, item_id: str) -> ReviewItem
         item.approval_status = ApprovalStatus.REJECTED
 
     if item.approval_status == ApprovalStatus.APPROVED:
-        if (
-            previous_status != ApprovalStatus.APPROVED
-            and item.download_status in (DownloadStatus.PENDING, DownloadStatus.FAILED)
+        if previous_status != ApprovalStatus.APPROVED and item.download_status in (
+            DownloadStatus.PENDING,
+            DownloadStatus.FAILED,
         ):
             item.download_ready_at = utc_now() + DECISION_UNDO_GRACE_PERIOD
     else:
@@ -146,14 +146,17 @@ def reopen_media_for_review(
         return None
 
     if item.download_status == DownloadStatus.IN_PROGRESS:
-        raise ReopenMediaConflictError("Cannot reopen media while download is in progress")
+        msg = "Cannot reopen media while download is in progress"
+        raise ReopenMediaConflictError(msg)
 
     if attachment.approval_status == ApprovalStatus.APPROVED:
         decided_at = attachment.decided_at
-        if decided_at is None or _elapsed_since(decided_at) > DECISION_UNDO_GRACE_PERIOD:
-            raise ReopenMediaConflictError(
-                "Approved media can only be reopened during the undo window"
-            )
+        if (
+            decided_at is None
+            or _elapsed_since(decided_at) > DECISION_UNDO_GRACE_PERIOD
+        ):
+            msg = "Approved media can only be reopened during the undo window"
+            raise ReopenMediaConflictError(msg)
 
     if attachment.approval_status == ApprovalStatus.UNDER_REVIEW:
         return item
@@ -175,7 +178,8 @@ def reopen_rejected_media_for_item(
     item: ReviewItem,
 ) -> ReviewItem:
     if item.download_status == DownloadStatus.IN_PROGRESS:
-        raise ReopenMediaConflictError("Cannot reopen media while download is in progress")
+        msg = "Cannot reopen media while download is in progress"
+        raise ReopenMediaConflictError(msg)
 
     attachments = session.exec(
         select(MediaAttachment)

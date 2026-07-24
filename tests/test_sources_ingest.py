@@ -34,7 +34,12 @@ from upvote_monitor.models.child import Children
 from upvote_monitor.models.upvoted import UpvotedResponse
 from upvote_monitor.sources.base import MediaAttachmentInput, SourceItem
 from upvote_monitor.sources.reddit import child_to_source_item
-from upvote_monitor.sources.x import LIKES_URL, XProvider, source_item_from_raw_tweet, validate_x_credentials
+from upvote_monitor.sources.x import (
+    LIKES_URL,
+    XProvider,
+    source_item_from_raw_tweet,
+    validate_x_credentials,
+)
 from upvote_monitor.upvoted import upvoted_posts_generator
 
 

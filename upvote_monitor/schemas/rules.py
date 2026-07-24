@@ -27,14 +27,16 @@ class RuleEntryRequest(BaseModel):
     def normalize_source(cls, value: str) -> str:
         normalized = value.strip().lower()
         if not normalized:
-            raise ValueError("source must not be empty")
+            msg = "source must not be empty"
+            raise ValueError(msg)
         return normalized
 
     @field_validator("target_value")
     @classmethod
     def target_must_not_be_empty(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("target_value must not be empty")
+            msg = "target_value must not be empty"
+            raise ValueError(msg)
         return value
 
     def normalized_target_value(self) -> str:

@@ -188,7 +188,8 @@ def test_refresh_failure_stores_error_type_and_message(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     def fail_ingest(_session: Session) -> None:
-        raise RuntimeError("boom")
+        msg = "boom"
+        raise RuntimeError(msg)
 
     monkeypatch.setattr("upvote_monitor.services.refresh.ingest_items", fail_ingest)
     caplog.set_level(logging.ERROR, logger="upvote_monitor.services.refresh")
@@ -552,7 +553,8 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
     def validate_reddit_credentials(**_kwargs: str) -> None:
-        raise AssertionError("probe should not run with missing credentials")
+        msg = "probe should not run with missing credentials"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(
         "upvote_monitor.api.settings.validate_reddit_credentials",
@@ -601,7 +603,8 @@ def test_settings_update_rejects_enabled_x_missing_twid(
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
     def validate_x_credentials(**_kwargs: str | None) -> None:
-        raise AssertionError("probe should not run with missing credentials")
+        msg = "probe should not run with missing credentials"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(
         "upvote_monitor.api.settings.validate_x_credentials",
@@ -658,7 +661,8 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
     def validate_reddit_credentials(**_kwargs: str) -> None:
-        raise RuntimeError("bad credentials")
+        msg = "bad credentials"
+        raise RuntimeError(msg)
 
     monkeypatch.setattr(
         "upvote_monitor.api.settings.validate_reddit_credentials",
@@ -704,10 +708,12 @@ def test_settings_update_does_not_probe_unrelated_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def validate_reddit_credentials(**_kwargs: str) -> None:
-        raise AssertionError("reddit probe should not run")
+        msg = "reddit probe should not run"
+        raise AssertionError(msg)
 
     def validate_x_credentials(**_kwargs: str | None) -> None:
-        raise AssertionError("x probe should not run")
+        msg = "x probe should not run"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(
         "upvote_monitor.api.settings.validate_reddit_credentials",

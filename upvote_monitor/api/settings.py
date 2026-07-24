@@ -273,7 +273,9 @@ def _prepare_x_update(
         enabled=False,
     )
     was_enabled = x_settings.enabled if existed else False
-    next_enabled = x_update.enabled if x_update.enabled is not None else x_settings.enabled
+    next_enabled = (
+        x_update.enabled if x_update.enabled is not None else x_settings.enabled
+    )
 
     options = X_DEFAULT_OPTIONS | decode_options(x_settings)
     if x_update.page_limit is not None:

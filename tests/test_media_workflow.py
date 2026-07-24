@@ -396,7 +396,9 @@ def test_rejected_media_can_be_reopened_for_review(engine: Engine) -> None:
 
 def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None:
     with Session(engine) as session:
-        recent_item = make_item("approved-undo-recent", approval_status=ApprovalStatus.APPROVED)
+        recent_item = make_item(
+            "approved-undo-recent", approval_status=ApprovalStatus.APPROVED
+        )
         recent = make_attachment(
             recent_item.id,
             0,
@@ -413,7 +415,9 @@ def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None
             approval_status=ApprovalStatus.APPROVED,
         )
         expired.decided_at = (
-            datetime.now(timezone.utc) - DECISION_UNDO_GRACE_PERIOD - timedelta(seconds=1)
+            datetime.now(timezone.utc)
+            - DECISION_UNDO_GRACE_PERIOD
+            - timedelta(seconds=1)
         )
         session.add(recent_item)
         session.add(expired_item)

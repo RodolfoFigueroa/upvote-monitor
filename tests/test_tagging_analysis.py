@@ -379,15 +379,11 @@ def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
     session = FakeSession.instances[0]
     assert session.input_array is not None
     assert session.input_array.shape == (1, 3, 2, 2)
-    assert session.input_array[0, :, 0, 0].tolist() == pytest.approx(
-        [1.0, -1.0, -1.0]
-    )
+    assert session.input_array[0, :, 0, 0].tolist() == pytest.approx([1.0, -1.0, -1.0])
 
 
 def test_pixai_scores_only_apply_sigmoid_to_logits() -> None:
-    probabilities = _scores_to_probabilities(
-        np.asarray([0.20, 0.70], dtype=np.float32)
-    )
+    probabilities = _scores_to_probabilities(np.asarray([0.20, 0.70], dtype=np.float32))
     logits = _scores_to_probabilities(np.asarray([-2.0, 2.0], dtype=np.float32))
 
     assert probabilities.tolist() == pytest.approx([0.20, 0.70])

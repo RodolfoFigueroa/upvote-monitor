@@ -25,7 +25,8 @@ def best_source_image_url(
 
 def best_image_list_url(images: list[Image], max_width: int = 640) -> UnescapedUrl:
     if not images:
-        raise ValueError("images must not be empty")
+        msg = "images must not be empty"
+        raise ValueError(msg)
 
     within_max = [img for img in images if img.x <= max_width]
     if within_max:
