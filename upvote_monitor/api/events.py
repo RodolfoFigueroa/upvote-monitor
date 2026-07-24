@@ -1,4 +1,4 @@
-import asyncio
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -11,7 +11,7 @@ from upvote_monitor.services.refresh_status import get_refresh_status
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-async def _event_stream():
+async def _event_stream() -> AsyncIterator[str]:
     queue = subscribe()
     try:
         yield format_sse("connected", {})
@@ -23,8 +23,6 @@ async def _event_stream():
         while True:
             event, data = await queue.get()
             yield format_sse(event, data)
-    except asyncio.CancelledError:
-        raise
     finally:
         unsubscribe(queue)
 

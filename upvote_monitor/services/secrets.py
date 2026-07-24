@@ -15,18 +15,18 @@ SECRET_PREVIEW_LENGTH = 4
 _DEFAULT_SECRET_KEY = object()
 
 
-class SecretStoreUnavailable(RuntimeError):
+class SecretStoreUnavailableError(RuntimeError):
     pass
 
 
-class SecretStoreInvalid(RuntimeError):
+class SecretStoreInvalidError(RuntimeError):
     pass
 
 
 class SecretStore:
     def __init__(
         self,
-        secret_key: str | None | object = _DEFAULT_SECRET_KEY,
+        secret_key: str | object | None = _DEFAULT_SECRET_KEY,
         path: Path = DEFAULT_SECRET_PATH,
     ) -> None:
         if secret_key is _DEFAULT_SECRET_KEY:
@@ -46,7 +46,7 @@ class SecretStore:
             return False
         try:
             return bool(self.get_source_secrets(source).get(key))
-        except SecretStoreInvalid:
+        except SecretStoreInvalidError:
             return False
 
     def source_secret_suffix(self, source: str, key: str) -> str | None:
@@ -54,7 +54,7 @@ class SecretStore:
             return None
         try:
             value = self.get_source_secrets(source).get(key)
-        except SecretStoreInvalid:
+        except SecretStoreInvalidError:
             return None
         if not value:
             return None
@@ -65,7 +65,7 @@ class SecretStore:
             return None
         try:
             value = self.get_source_secrets(source).get(key)
-        except SecretStoreInvalid:
+        except SecretStoreInvalidError:
             return None
         if not value:
             return None
@@ -111,13 +111,13 @@ class SecretStore:
             plaintext = fernet.decrypt(self.path.read_bytes())
         except InvalidToken as exc:
             msg = "Encrypted secrets could not be decrypted"
-            raise SecretStoreInvalid(msg) from exc
+            raise SecretStoreInvalidError(msg) from exc
 
         try:
             value = json.loads(plaintext.decode("utf-8"))
         except json.JSONDecodeError as exc:
             msg = "Encrypted secrets are not valid JSON"
-            raise SecretStoreInvalid(msg) from exc
+            raise SecretStoreInvalidError(msg) from exc
         return value if isinstance(value, dict) else {}
 
     def write_all(self, data: dict[str, Any]) -> None:
@@ -129,6 +129,6 @@ class SecretStore:
     def _fernet(self) -> Fernet:
         if not self._secret_key:
             msg = "UPVOTE_MONITOR_SECRET_KEY is not configured"
-            raise SecretStoreUnavailable(msg)
+            raise SecretStoreUnavailableError(msg)
         digest = sha256(self._secret_key.encode("utf-8")).digest()
         return Fernet(base64.urlsafe_b64encode(digest))

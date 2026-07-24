@@ -12,8 +12,7 @@ REDDIT_BASE_URL = "https://reddit.com"
 
 def normalize_reddit_community(name: str) -> str:
     name = name.strip().lower()
-    name = name.removeprefix("r/")
-    return name
+    return name.removeprefix("r/")
 
 
 def reddit_community_label(name: str) -> str:
@@ -46,7 +45,7 @@ def _download_strategy_for_child(child: Children) -> DownloadStrategy:
 
 
 def _absolute_reddit_url(permalink: str) -> str:
-    if permalink.startswith("http://") or permalink.startswith("https://"):
+    if permalink.startswith(("http://", "https://")):
         return permalink
     return f"{REDDIT_BASE_URL}{permalink}"
 

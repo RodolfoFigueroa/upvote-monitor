@@ -1,14 +1,21 @@
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
 
 _subscribers: set[asyncio.Queue[tuple[str, dict[str, Any]]]] = set()
-_loop: asyncio.AbstractEventLoop | None = None
+
+
+@dataclass
+class _EventBusState:
+    loop: asyncio.AbstractEventLoop | None = None
+
+
+_state = _EventBusState()
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
-    global _loop
-    _loop = loop
+    _state.loop = loop
 
 
 def subscribe() -> asyncio.Queue[tuple[str, dict[str, Any]]]:
@@ -27,9 +34,9 @@ def _deliver(event: str, data: dict[str, Any]) -> None:
 
 
 def broadcast(event: str, data: dict[str, Any]) -> None:
-    if _loop is None or _loop.is_closed():
+    if _state.loop is None or _state.loop.is_closed():
         return
-    _loop.call_soon_threadsafe(_deliver, event, data)
+    _state.loop.call_soon_threadsafe(_deliver, event, data)
 
 
 def format_sse(event: str, data: dict[str, Any]) -> str:

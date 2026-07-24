@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import json
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypedDict, Unpack
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -14,9 +14,14 @@ from upvote_monitor.enums import DownloadStrategy
 from upvote_monitor.services.source_settings import X_DEFAULT_USER_AGENT
 from upvote_monitor.sources.base import MediaAttachmentInput, SourceItem
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from pydantic import JsonValue
+
 SOURCE = "x"
 DOMAIN = "x.com"
-DEFAULT_BEARER_TOKEN = (
+DEFAULT_BEARER_CREDENTIAL = (
     "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
     "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
@@ -83,13 +88,11 @@ def _flatten_params(params: dict[str, Any]) -> dict[str, str]:
     return flattened
 
 
-def json_dumps_compact(value: Any) -> str:
-    import json
-
+def json_dumps_compact(value: JsonValue) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
-def _find_values(obj: Any, key: str) -> list[Any]:
+def _find_values(obj: JsonValue, key: str) -> list[JsonValue]:
     results = []
     if isinstance(obj, dict):
         if key in obj:
@@ -128,9 +131,10 @@ def _parse_created_at(value: str | None) -> datetime:
             parsed = parsedate_to_datetime(value)
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=UTC)
-            return parsed
         except (TypeError, ValueError):
             pass
+        else:
+            return parsed
     return datetime.now(UTC)
 
 
@@ -143,14 +147,17 @@ def _request_json(
     try:
         data = response.json()
     except ValueError as exc:
+        msg = f"X returned non-JSON response with status {response.status_code}"
         raise XSourceError(
-            f"X returned non-JSON response with status {response.status_code}",
+            msg,
         ) from exc
 
     if response.status_code >= 400:
-        raise XSourceError(f"X returned HTTP {response.status_code}: {data}")
+        msg = f"X returned HTTP {response.status_code}: {data}"
+        raise XSourceError(msg)
     if isinstance(data, dict) and data.get("errors"):
-        raise XSourceError(f"X returned GraphQL errors: {data['errors']}")
+        msg = f"X returned GraphQL errors: {data['errors']}"
+        raise XSourceError(msg)
     if not isinstance(data, dict):
         msg = "X returned an unexpected response shape"
         raise XSourceError(msg)
@@ -204,7 +211,8 @@ def _user_by_screen_name(
     data = _request_json(session, USER_BY_SCREEN_NAME_URL, params=params)
     user_data = data.get("data", {}).get("user", {}).get("result")
     if not isinstance(user_data, dict):
-        raise XSourceError(f"X did not return user data for @{clean_name}")
+        msg = f"X did not return user data for @{clean_name}"
+        raise XSourceError(msg)
     user_legacy = user_data.get("legacy", {})
     resolved_screen_name = (
         str(user_legacy.get("screen_name")) if isinstance(user_legacy, dict) else None
@@ -222,7 +230,8 @@ def _authenticated_user(session: requests.Session) -> tuple[str, str]:
             errors.append(f"{settings_url}: {exc}")
     else:
         joined_errors = "; ".join(errors)
-        raise XSourceError(f"could not discover authenticated X user: {joined_errors}")
+        msg = f"could not discover authenticated X user: {joined_errors}"
+        raise XSourceError(msg)
 
     screen_name = settings.get("screen_name")
     if not screen_name:
@@ -248,7 +257,7 @@ def validate_x_credentials(
         auth_token=auth_token,
         ct0=ct0,
         twid=twid,
-        bearer_token=bearer_token or DEFAULT_BEARER_TOKEN,
+        bearer_token=bearer_token or DEFAULT_BEARER_CREDENTIAL,
         user_agent=user_agent,
     )
     _user_likes_page(session, twid_user_id, 1, None)
@@ -269,7 +278,7 @@ def _raw_tweet_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _tweet_from_result_container(value: Any) -> dict[str, Any] | None:
+def _tweet_from_result_container(value: JsonValue) -> dict[str, JsonValue] | None:
     if not isinstance(value, dict):
         return None
 
@@ -469,41 +478,52 @@ def _extract_cursor(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def raw_tweets_from_likes_response(
-    data: dict[str, Any],
-) -> tuple[list[dict[str, Any]], str | None]:
-    instructions_list = _find_values(data, "instructions")
-    if not instructions_list:
-        return [], None
-
+def _timeline_entries(data: dict[str, Any]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for instructions in instructions_list:
+    for instructions in _find_values(data, "instructions"):
         if not isinstance(instructions, list):
             continue
         for instruction in instructions:
             if isinstance(instruction, dict):
-                entries.extend(instruction.get("entries", []))
+                raw_entries = instruction.get("entries", [])
+                if isinstance(raw_entries, list):
+                    entries.extend(
+                        entry for entry in raw_entries if isinstance(entry, dict)
+                    )
+    return entries
 
-    tweets = []
+
+def _tweet_item_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    entry_id = entry.get("entryId", "")
+    if not isinstance(entry_id, str) or not entry_id.startswith(
+        ("tweet", "profile-conversation", "profile-grid"),
+    ):
+        return None
+    if not entry_id.startswith("profile-conversation"):
+        return entry
+    content = entry.get("content", {})
+    if not isinstance(content, dict):
+        return None
+    conversation_items = content.get("items", [])
+    if not isinstance(conversation_items, list) or not conversation_items:
+        return None
+    first_item = conversation_items[0]
+    return first_item if isinstance(first_item, dict) else None
+
+
+def raw_tweets_from_likes_response(
+    data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    tweets: list[dict[str, Any]] = []
     next_cursor = None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
+    for entry in _timeline_entries(data):
         cursor = _extract_cursor(entry)
         if cursor:
             next_cursor = cursor
 
-        entry_id = entry.get("entryId", "")
-        if not entry_id.startswith(("tweet", "profile-conversation", "profile-grid")):
+        item = _tweet_item_from_entry(entry)
+        if item is None:
             continue
-
-        item = entry
-        if entry_id.startswith("profile-conversation"):
-            conversation_items = entry.get("content", {}).get("items", [])
-            if not conversation_items:
-                continue
-            item = conversation_items[0]
-
         tweet_data = _raw_tweet_from_entry(item)
         if tweet_data is not None:
             tweets.append(tweet_data)
@@ -536,29 +556,29 @@ def _user_likes_page(
     return raw_tweets_from_likes_response(data)
 
 
+class XProviderOptions(TypedDict):
+    auth_token: str
+    ct0: str
+    twid: str | None
+    bearer_token: str | None
+    user_agent: str
+    page_size: int
+    page_limit: int
+
+
 class XProvider:
     source = SOURCE
 
-    def __init__(
-        self,
-        *,
-        auth_token: str,
-        ct0: str,
-        twid: str | None,
-        bearer_token: str | None,
-        user_agent: str,
-        page_size: int,
-        page_limit: int,
-    ) -> None:
-        self.auth_token = auth_token
-        self.ct0 = ct0
-        self.twid = twid
-        self.bearer_token = bearer_token or DEFAULT_BEARER_TOKEN
-        self.user_agent = user_agent or X_DEFAULT_USER_AGENT
-        self.page_size = page_size
-        self.page_limit = page_limit
+    def __init__(self, **options: Unpack[XProviderOptions]) -> None:
+        self.auth_token = options["auth_token"]
+        self.ct0 = options["ct0"]
+        self.twid = options["twid"]
+        self.bearer_token = options["bearer_token"] or DEFAULT_BEARER_CREDENTIAL
+        self.user_agent = options["user_agent"] or X_DEFAULT_USER_AGENT
+        self.page_size = options["page_size"]
+        self.page_limit = options["page_limit"]
 
-    def _authenticated_user_id(self, session: requests.Session) -> str:
+    def authenticated_user_id(self, session: requests.Session) -> str:
         if twid_user_id := user_id_from_twid(self.twid):
             return twid_user_id
         user_id, _screen_name = _authenticated_user(session)
@@ -572,7 +592,7 @@ class XProvider:
             bearer_token=self.bearer_token,
             user_agent=self.user_agent,
         )
-        authenticated_user_id = self._authenticated_user_id(session)
+        authenticated_user_id = self.authenticated_user_id(session)
 
         cursor = None
         for _ in range(self.page_limit):

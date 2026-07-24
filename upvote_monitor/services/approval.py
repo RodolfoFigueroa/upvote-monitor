@@ -107,6 +107,24 @@ class RecomputePendingItemsResult:
     approved_item_ids: list[str] = field(default_factory=list)
 
 
+def _item_matches_rule(
+    item: ReviewItem,
+    source: str,
+    target_type: RuleTargetType,
+    normalized_target: str,
+) -> bool:
+    if item.source != source:
+        return False
+    item_target = (
+        item.community_name
+        if target_type == RuleTargetType.COMMUNITY
+        else item.author_name
+    )
+    return item_target is not None and (
+        normalize_rule_target(source, target_type, item_target) == normalized_target
+    )
+
+
 def recompute_pending_items_for_rule(
     session: Session,
     source: str,
@@ -126,27 +144,11 @@ def recompute_pending_items_for_rule(
             ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
         ),
     ).all()
-    matching_items = []
-    for item in pending_items:
-        if item.source != source:
-            continue
-        if target_type == RuleTargetType.COMMUNITY:
-            if item.community_name is None:
-                continue
-            item_target = normalize_rule_target(
-                source,
-                target_type,
-                item.community_name,
-            )
-            if item_target != normalized:
-                continue
-        elif target_type == RuleTargetType.AUTHOR:
-            if item.author_name is None:
-                continue
-            item_target = normalize_rule_target(source, target_type, item.author_name)
-            if item_target != normalized:
-                continue
-        matching_items.append(item)
+    matching_items = [
+        item
+        for item in pending_items
+        if _item_matches_rule(item, source, target_type, normalized)
+    ]
 
     result = RecomputePendingItemsResult(
         source=source,

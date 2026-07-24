@@ -4,12 +4,20 @@ from pathlib import Path
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from pydantic import JsonValue
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from upvote_monitor.api.items import reopen_rejected_media
-from upvote_monitor.api.media import list_media, reopen_media, update_media
+from upvote_monitor.api.media import (
+    MediaListFilters,
+    reopen_media,
+    update_media,
+)
+from upvote_monitor.api.media import (
+    list_media as list_media_endpoint,
+)
 from upvote_monitor.db.models import AppSettings, MediaAttachment, ReviewItem
 from upvote_monitor.enums import (
     ApprovalMode,
@@ -17,13 +25,23 @@ from upvote_monitor.enums import (
     DownloadStatus,
     IllustrationLabel,
 )
-from upvote_monitor.schemas.items import MediaUpdate
+from upvote_monitor.schemas.items import MediaListResponse, MediaUpdate
 from upvote_monitor.services.download import process_pending_downloads
 from upvote_monitor.services.media_workflow import (
     DECISION_UNDO_GRACE_PERIOD,
     attachment_counts,
     set_media_decision,
 )
+
+
+def list_media(
+    session: Session,
+    **filters: JsonValue,
+) -> MediaListResponse:
+    return list_media_endpoint(
+        session=session,
+        filters=MediaListFilters.model_validate(filters),
+    )
 
 
 @pytest.fixture

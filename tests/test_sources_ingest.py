@@ -2,9 +2,11 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+import requests
+from pydantic import JsonValue
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -23,7 +25,6 @@ from upvote_monitor.enums import (
     ListType,
     RuleTargetType,
 )
-from upvote_monitor.models.child import Children
 from upvote_monitor.models.upvoted import UpvotedResponse
 from upvote_monitor.services.ingest import get_source_providers, ingest_items
 from upvote_monitor.services.secrets import SecretStore
@@ -33,7 +34,7 @@ from upvote_monitor.services.source_settings import (
     encode_options,
 )
 from upvote_monitor.sources.base import MediaAttachmentInput, SourceItem
-from upvote_monitor.sources.reddit import child_to_source_item
+from upvote_monitor.sources.reddit import RedditProvider, child_to_source_item
 from upvote_monitor.sources.x import (
     LIKES_URL,
     XProvider,
@@ -41,6 +42,12 @@ from upvote_monitor.sources.x import (
     validate_x_credentials,
 )
 from upvote_monitor.upvoted import upvoted_posts_generator
+
+if TYPE_CHECKING:
+    from upvote_monitor.models.child import Children
+
+ENCRYPTION_KEY = "test-provider-key"
+AUTH_VALUE = "auth"
 
 
 @pytest.fixture
@@ -496,13 +503,13 @@ def test_source_providers_use_reddit_source_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_path = tmp_path / "secrets.enc"
-    SecretStore(secret_key="provider-key", path=secret_path).update_source_secrets(
+    SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path).update_source_secrets(
         REDDIT_SOURCE,
         {"username": "myusername", "session_cookie": "cookie"},
     )
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="provider-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.services.ingest.SecretStore", store_factory)
 
@@ -527,6 +534,7 @@ def test_source_providers_use_reddit_source_settings(
 
     assert len(providers) == 1
     provider = providers[0]
+    assert isinstance(provider, RedditProvider)
     assert provider.source == REDDIT_SOURCE
     assert provider.username == "myusername"
     assert provider.session_cookie == "cookie"
@@ -541,13 +549,13 @@ def test_source_providers_use_x_source_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_path = tmp_path / "secrets.enc"
-    SecretStore(secret_key="provider-key", path=secret_path).update_source_secrets(
+    SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path).update_source_secrets(
         X_SOURCE,
-        {"auth_token": "auth", "ct0": "csrf", "twid": "u%3D123"},
+        {"auth_token": AUTH_VALUE, "ct0": "csrf", "twid": "u%3D123"},
     )
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="provider-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.services.ingest.SecretStore", store_factory)
 
@@ -573,7 +581,7 @@ def test_source_providers_use_x_source_settings(
     provider = providers[0]
     assert isinstance(provider, XProvider)
     assert provider.source == X_SOURCE
-    assert provider.auth_token == "auth"
+    assert provider.auth_token == AUTH_VALUE
     assert provider.ct0 == "csrf"
     assert provider.twid == "u%3D123"
     assert provider.user_agent == "agent/1.0"
@@ -583,7 +591,7 @@ def test_source_providers_use_x_source_settings(
 
 def test_x_provider_resolves_authenticated_user_from_twid() -> None:
     provider = XProvider(
-        auth_token="auth",
+        auth_token=AUTH_VALUE,
         ct0="csrf",
         twid="u%3D123",
         bearer_token=None,
@@ -592,7 +600,7 @@ def test_x_provider_resolves_authenticated_user_from_twid() -> None:
         page_limit=5,
     )
 
-    assert provider._authenticated_user_id(cast("Any", object())) == "123"
+    assert provider.authenticated_user_id(requests.Session()) == "123"
 
 
 def test_x_credential_validation_uses_likes_endpoint_from_twid(
@@ -611,7 +619,7 @@ def test_x_credential_validation_uses_likes_endpoint_from_twid(
     monkeypatch.setattr("upvote_monitor.sources.x._request_json", fake_request_json)
 
     validate_x_credentials(
-        auth_token="auth",
+        auth_token=AUTH_VALUE,
         ct0="csrf",
         twid="u%3D123",
         bearer_token=None,
@@ -640,8 +648,8 @@ def test_source_providers_skip_unconfigured_reddit(engine: Engine) -> None:
     assert providers == []
 
 
-def _reddit_no_media_child_data(**overrides: Any) -> dict[str, Any]:
-    data: dict[str, Any] = {
+def _reddit_no_media_child_data(**overrides: JsonValue) -> dict[str, JsonValue]:
+    data: dict[str, JsonValue] = {
         "all_awardings": [],
         "allow_live_comments": False,
         "approved_at_utc": None,

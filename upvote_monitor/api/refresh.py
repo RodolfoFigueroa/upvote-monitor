@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import desc
 from sqlmodel import Session, col, select
@@ -25,10 +27,10 @@ def _run_refresh_background(run_id: str) -> None:
         execute_refresh_run(session, run_id)
 
 
-@router.post("", response_model=RefreshStartResponse, status_code=202)
+@router.post("", status_code=202)
 def start_refresh(
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RefreshStartResponse:
     try:
         run = create_refresh_run(session)
@@ -39,18 +41,18 @@ def start_refresh(
     return RefreshStartResponse(run_id=run.id, status=run.status.value)
 
 
-@router.get("/status", response_model=RefreshStatusResponse)
+@router.get("/status")
 def get_refresh_status_endpoint(
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RefreshStatusResponse:
     return get_refresh_status(session)
 
 
-@router.get("/runs", response_model=list[RefreshRunResponse])
+@router.get("/runs")
 def list_refresh_runs(
-    session: Session = Depends(get_db_session),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    session: Annotated[Session, Depends(get_db_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[RefreshRunResponse]:
     runs = session.exec(
         select(RefreshRun)
@@ -61,10 +63,10 @@ def list_refresh_runs(
     return [RefreshRunResponse.from_db(run) for run in runs]
 
 
-@router.get("/runs/{run_id}", response_model=RefreshRunResponse)
+@router.get("/runs/{run_id}")
 def get_refresh_run(
     run_id: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RefreshRunResponse:
     run = session.get(RefreshRun, run_id)
     if run is None:

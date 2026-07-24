@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, HttpUrl, computed_field, model_validator
+from pydantic import Field, HttpUrl, JsonValue, computed_field, model_validator
 from yt_dlp import YoutubeDL
 
 from upvote_monitor.functions import download_image_from_url
@@ -16,7 +16,7 @@ from upvote_monitor.models.strict import StrictBaseModel
 from upvote_monitor.models.url import UnescapedUrl
 
 
-def _add_post_hint_to_data(child_data: dict) -> None:
+def _add_post_hint_to_data(child_data: dict[str, JsonValue]) -> None:
     if "post_hint" not in child_data:
         if child_data.get("is_gallery"):
             child_data["post_hint"] = "gallery"
@@ -110,7 +110,7 @@ class _BaseChildData(StrictBaseModel, ABC):
     link_flair_text_color: str | None = None
     link_flair_type: str
     locked: bool
-    media: None | OtherMedia | RedditMedia
+    media: OtherMedia | RedditMedia | None
     media_embed: dict | None
     media_only: bool
     mod_note: str | None
@@ -178,7 +178,10 @@ class _BaseChildData(StrictBaseModel, ABC):
 
     def download_to_path(self, path: os.PathLike | str) -> None:
         if len(self.media_download_url) != 1:
-            msg = "More than one media download URL detected. Use download_to_dir instead."
+            msg = (
+                "More than one media download URL detected. "
+                "Use download_to_dir instead."
+            )
             raise ValueError(msg)
 
         self._download_to_path(self.media_download_url[0], path)
@@ -392,16 +395,20 @@ ChildData = Annotated[
 class Children(StrictBaseModel):
     @model_validator(mode="before")
     @classmethod
-    def handle_missing_post_hint(cls, input: Any) -> Any:
-        child_data = input.get("data")
-        if child_data:
-            _add_post_hint_to_data(child_data)
+    def handle_missing_post_hint(cls, input_value: JsonValue) -> JsonValue:
+        if not isinstance(input_value, dict):
+            return input_value
+        child_data = input_value.get("data")
+        if not isinstance(child_data, dict):
+            return input_value
+        _add_post_hint_to_data(child_data)
 
         crosspost_parents = child_data.get("crosspost_parent_list")
-        if crosspost_parents:
+        if isinstance(crosspost_parents, list):
             for parent in crosspost_parents:
-                _add_post_hint_to_data(parent)
-        return input
+                if isinstance(parent, dict):
+                    _add_post_hint_to_data(parent)
+        return input_value
 
     kind: Literal["t3"]
     data: ChildData

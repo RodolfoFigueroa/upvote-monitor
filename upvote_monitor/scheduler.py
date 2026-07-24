@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -14,7 +15,14 @@ from upvote_monitor.services.refresh import (
 )
 
 JOB_ID = "scheduled_refresh"
-_scheduler: BackgroundScheduler | None = None
+
+
+@dataclass
+class _SchedulerState:
+    scheduler: BackgroundScheduler | None = None
+
+
+_state = _SchedulerState()
 
 
 def _execute_refresh_run(run_id: str) -> None:
@@ -32,10 +40,9 @@ def _run_scheduled_refresh() -> None:
 
 
 def get_scheduler() -> BackgroundScheduler:
-    global _scheduler
-    if _scheduler is None:
-        _scheduler = BackgroundScheduler()
-    return _scheduler
+    if _state.scheduler is None:
+        _state.scheduler = BackgroundScheduler()
+    return _state.scheduler
 
 
 def reschedule_from_settings(settings: AppSettings | None = None) -> None:

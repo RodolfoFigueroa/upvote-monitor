@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar, NotRequired, TypedDict, Unpack
 
 import numpy as np
 import pytest
@@ -131,20 +132,33 @@ def make_attachment(
     )
 
 
-def add_settings(
-    session: Session,
-    *,
-    tagger_enabled: bool = True,
-    auto_approve_enabled: bool = True,
-    threshold: float = 0.9,
-    general_storage_threshold: float = 0.01,
-    character_storage_threshold: float = 0.01,
-    general_display_threshold: float = 0.15,
-    character_display_threshold: float = 0.35,
-    app_general_display_threshold: float = 0.15,
-    app_character_display_threshold: float = 0.35,
-    profile_id: str = TEST_PROFILE_ID,
-) -> None:
+class SettingsOptions(TypedDict):
+    tagger_enabled: NotRequired[bool]
+    auto_approve_enabled: NotRequired[bool]
+    threshold: NotRequired[float]
+    general_storage_threshold: NotRequired[float]
+    character_storage_threshold: NotRequired[float]
+    general_display_threshold: NotRequired[float]
+    character_display_threshold: NotRequired[float]
+    app_general_display_threshold: NotRequired[float]
+    app_character_display_threshold: NotRequired[float]
+    profile_id: NotRequired[str]
+
+
+def add_settings(session: Session, **options: Unpack[SettingsOptions]) -> None:
+    tagger_enabled = options.get("tagger_enabled", True)
+    auto_approve_enabled = options.get("auto_approve_enabled", True)
+    threshold = options.get("threshold", 0.9)
+    general_storage_threshold = options.get("general_storage_threshold", 0.01)
+    character_storage_threshold = options.get("character_storage_threshold", 0.01)
+    general_display_threshold = options.get("general_display_threshold", 0.15)
+    character_display_threshold = options.get("character_display_threshold", 0.35)
+    app_general_display_threshold = options.get("app_general_display_threshold", 0.15)
+    app_character_display_threshold = options.get(
+        "app_character_display_threshold",
+        0.35,
+    )
+    profile_id = options.get("profile_id", TEST_PROFILE_ID)
     session.add(
         AnalysisProfile(
             id=profile_id,
@@ -300,14 +314,7 @@ def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
 
     model_path.write_bytes(b"onnx")
     tags_path.write_text(
-        "\n".join(
-            [
-                "name,category",
-                "manga,0",
-                "hatsune_miku,4",
-                "ignored_copyright,3",
-            ],
-        ),
+        "name,category\nmanga,0\nhatsune_miku,4\nignored_copyright,3",
         encoding="utf-8",
     )
     preprocess_path.write_text(
@@ -343,10 +350,10 @@ def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
 
     class FakeInput:
         name = "pixel_values"
-        shape = [1, 3, 2, 2]
+        shape: ClassVar[list[int]] = [1, 3, 2, 2]
 
     class FakeSession:
-        instances: list["FakeSession"] = []
+        instances: ClassVar[list["FakeSession"]] = []
 
         def __init__(self, model: str, *, providers: list[str]) -> None:
             assert model == str(model_path)

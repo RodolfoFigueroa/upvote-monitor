@@ -4,9 +4,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import or_, update
+from sqlalchemy import ColumnElement, or_, update
 from sqlmodel import Session, col, select
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 
 from upvote_monitor.db.engine import engine
 from upvote_monitor.db.models import AppSettings, MediaAttachment, ReviewItem
@@ -61,7 +62,7 @@ def _broadcast_item_updated(item: ReviewItem) -> None:
     )
 
 
-def _download_ready_filter(now: datetime):
+def _download_ready_filter(now: datetime) -> ColumnElement[bool]:
     return or_(
         col(ReviewItem.download_ready_at).is_(None),
         col(ReviewItem.download_ready_at) <= now,
@@ -162,9 +163,7 @@ def _download_claimed_item(
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         attachments = approved_media_attachments(session, item.id)
-        if not attachments:
-            msg = "Item has no kept media to download"
-            raise RuntimeError(msg)
+        _ensure_download_attachments(attachments)
 
         for attachment in attachments:
             target_path = target_dir / f"{attachment.sort_index:02d}"
@@ -174,7 +173,7 @@ def _download_claimed_item(
         item.downloaded_at = datetime.now(UTC)
         item.download_dir = str(target_dir.resolve())
         item.download_error = None
-    except Exception as exc:
+    except (DownloadError, OSError, RuntimeError, ValueError) as exc:
         item.download_status = DownloadStatus.FAILED
         item.download_error = str(exc)
 
@@ -182,6 +181,14 @@ def _download_claimed_item(
     session.commit()
     session.refresh(item)
     _broadcast_item_updated(item)
+
+
+def _ensure_download_attachments(
+    attachments: list[MediaAttachment],
+) -> None:
+    if not attachments:
+        msg = "Item has no kept media to download"
+        raise RuntimeError(msg)
 
 
 def _download_attachment_to_path(
@@ -203,7 +210,8 @@ def _download_attachment_to_path(
             ydl.download([attachment.download_url])
         return
 
-    raise ValueError(f"Unsupported download strategy: {attachment.download_strategy}")
+    msg = f"Unsupported download strategy: {attachment.download_strategy}"
+    raise ValueError(msg)
 
 
 def process_pending_downloads(
@@ -217,7 +225,7 @@ def process_pending_downloads(
         raise RuntimeError(msg)
 
     items = session.exec(
-        select(ReviewItem.id).where(
+        select(ReviewItem).where(
             col(ReviewItem.approval_status) == ApprovalStatus.APPROVED,
             col(ReviewItem.download_status).in_(
                 [DownloadStatus.PENDING, DownloadStatus.FAILED],
@@ -228,7 +236,8 @@ def process_pending_downloads(
     triggered = 0
     failed = 0
 
-    for item_id in items:
+    for queued_item in items:
+        item_id = queued_item.id
         item = claim_item_for_download(session, item_id)
         if item is None and wait_until_ready:
             pending_item = session.get(ReviewItem, item_id)

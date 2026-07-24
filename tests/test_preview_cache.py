@@ -180,6 +180,7 @@ def test_preview_endpoint_fetches_and_reuses_cache(
         calls += 1
         assert url == "https://example.com/preview.jpg"
         assert stream is True
+        assert timeout > 0
         return FakeResponse(b"image-data", "image/jpeg")
 
     monkeypatch.setattr(preview_cache.requests, "get", fake_get)

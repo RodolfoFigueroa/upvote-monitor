@@ -3,7 +3,7 @@ import logging
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from hashlib import sha1
+from hashlib import sha256
 
 from sqlmodel import Session, select
 
@@ -17,8 +17,8 @@ from upvote_monitor.enums import ApprovalStatus, DownloadStatus
 from upvote_monitor.services.approval import compute_initial_status, load_rule_sets
 from upvote_monitor.services.secrets import (
     SecretStore,
-    SecretStoreInvalid,
-    SecretStoreUnavailable,
+    SecretStoreInvalidError,
+    SecretStoreUnavailableError,
 )
 from upvote_monitor.services.source_settings import (
     REDDIT_SOURCE,
@@ -46,7 +46,7 @@ def get_source_providers(session: Session) -> list[SourceProvider]:
         reddit_options = reddit_options_from_source_settings(reddit_settings)
         try:
             reddit_secrets = secret_store.get_source_secrets(REDDIT_SOURCE)
-        except (SecretStoreInvalid, SecretStoreUnavailable):
+        except (SecretStoreInvalidError, SecretStoreUnavailableError):
             logger.warning("Reddit source is enabled but secrets are unavailable")
             reddit_secrets = {}
 
@@ -82,7 +82,7 @@ def get_source_providers(session: Session) -> list[SourceProvider]:
         x_options = x_options_from_source_settings(x_settings)
         try:
             x_secrets = secret_store.get_source_secrets(X_SOURCE)
-        except (SecretStoreInvalid, SecretStoreUnavailable):
+        except (SecretStoreInvalidError, SecretStoreUnavailableError):
             logger.warning("X source is enabled but secrets are unavailable")
             x_secrets = {}
 
@@ -124,14 +124,14 @@ def item_id_for_source(source: str, source_item_id: str) -> str:
     if safe_item_id == source_item_id and safe_item_id:
         return f"{safe_source}_{safe_item_id}"
 
-    digest = sha1(source_item_id.encode("utf-8")).hexdigest()[:10]
+    digest = sha256(source_item_id.encode()).hexdigest()[:10]
     safe_item_id = safe_item_id or "item"
     return f"{safe_source}_{safe_item_id}_{digest}"
 
 
 def _existing_source_keys(session: Session) -> set[tuple[str, str]]:
-    rows = session.exec(select(ReviewItem.source, ReviewItem.source_item_id)).all()
-    return {(source, source_item_id) for source, source_item_id in rows}
+    items = session.exec(select(ReviewItem)).all()
+    return {(item.source, item.source_item_id) for item in items}
 
 
 def _review_item_from_source_item(source_item: SourceItem) -> ReviewItem:

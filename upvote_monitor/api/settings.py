@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
@@ -11,8 +12,8 @@ from upvote_monitor.scheduler import reschedule_from_settings
 from upvote_monitor.schemas.settings import SettingsResponse, SettingsUpdate
 from upvote_monitor.services.secrets import (
     SecretStore,
-    SecretStoreInvalid,
-    SecretStoreUnavailable,
+    SecretStoreInvalidError,
+    SecretStoreUnavailableError,
 )
 from upvote_monitor.services.source_settings import (
     REDDIT_DEFAULT_OPTIONS,
@@ -132,12 +133,12 @@ def _source_secrets_or_400(
 ) -> dict[str, str]:
     try:
         return secret_store.get_source_secrets(source)
-    except SecretStoreUnavailable as exc:
+    except SecretStoreUnavailableError as exc:
         raise HTTPException(
             status_code=400,
             detail="UPVOTE_MONITOR_SECRET_KEY is not configured",
         ) from exc
-    except SecretStoreInvalid as exc:
+    except SecretStoreInvalidError as exc:
         raise HTTPException(
             status_code=400,
             detail="Encrypted secrets could not be read",
@@ -151,12 +152,12 @@ def _update_source_secrets_or_400(
 ) -> None:
     try:
         secret_store.update_source_secrets(source, updates)
-    except SecretStoreUnavailable as exc:
+    except SecretStoreUnavailableError as exc:
         raise HTTPException(
             status_code=400,
             detail="UPVOTE_MONITOR_SECRET_KEY is not configured",
         ) from exc
-    except SecretStoreInvalid as exc:
+    except SecretStoreInvalidError as exc:
         raise HTTPException(
             status_code=400,
             detail="Encrypted secrets could not be read",
@@ -180,6 +181,14 @@ def _effective_secrets(
 
 def _has_new_secret(updates: dict[str, str | None]) -> bool:
     return any(value not in (None, "") for value in updates.values())
+
+
+def _missing_reddit_credentials(effective_secrets: dict[str, str]) -> list[str]:
+    return [
+        field
+        for field in REDDIT_REQUIRED_CREDENTIAL_FIELDS
+        if not effective_secrets.get(field)
+    ]
 
 
 def _prepare_reddit_update(
@@ -228,11 +237,7 @@ def _prepare_reddit_update(
     effective_secrets = _effective_secrets(current_secrets, secret_updates)
 
     if needs_credentials:
-        missing = []
-        if not effective_secrets.get("username"):
-            missing.append("username")
-        if not effective_secrets.get("session_cookie"):
-            missing.append("session_cookie")
+        missing = _missing_reddit_credentials(effective_secrets)
         if missing:
             raise _missing_credentials(REDDIT_SOURCE, missing)
 
@@ -370,16 +375,18 @@ def _settings_response(
     )
 
 
-@router.get("", response_model=SettingsResponse)
-def get_settings(session: Session = Depends(get_db_session)) -> SettingsResponse:
+@router.get("")
+def get_settings(
+    session: Annotated[Session, Depends(get_db_session)],
+) -> SettingsResponse:
     settings = _get_settings_or_404(session)
     return _settings_response(session, settings)
 
 
-@router.patch("", response_model=SettingsResponse)
+@router.patch("")
 def update_settings(
     body: SettingsUpdate,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> SettingsResponse:
     settings = _get_settings_or_404(session)
     updates = body.model_dump(exclude_unset=True, exclude={"sources"})

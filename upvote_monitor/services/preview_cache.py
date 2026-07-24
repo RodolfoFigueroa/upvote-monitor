@@ -38,7 +38,7 @@ class PreviewCacheError(Exception):
     pass
 
 
-class PreviewCacheNotFound(PreviewCacheError):
+class PreviewCacheNotFoundError(PreviewCacheError):
     pass
 
 
@@ -137,7 +137,7 @@ def preview_media_type(path: Path) -> str:
 def get_or_fetch_cached_preview(item_id: str, index: int, remote_url: str) -> Path:
     if not is_cacheable_preview_url(remote_url):
         msg = "Preview URL is not cacheable"
-        raise PreviewCacheNotFound(msg)
+        raise PreviewCacheNotFoundError(msg)
 
     cached = find_cached_preview_file(item_id, index)
     if cached is not None:
@@ -181,14 +181,7 @@ def _fetch_preview(item_id: str, index: int, remote_url: str) -> Path:
             msg = "Preview response is not an image"
             raise PreviewCacheFetchError(msg)
 
-        content_length = response.headers.get("Content-Length")
-        if content_length is not None:
-            try:
-                if int(content_length) > MAX_PREVIEW_BYTES:
-                    msg = "Preview response is too large"
-                    raise PreviewCacheFetchError(msg)
-            except ValueError:
-                pass
+        _validate_content_length(response.headers.get("Content-Length"))
 
         cache_dir = item_cache_dir(item_id)
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -196,29 +189,46 @@ def _fetch_preview(item_id: str, index: int, remote_url: str) -> Path:
         target_path = cache_dir / f"{index}{extension}"
         temp_path = cache_dir / f".{index}.{uuid4().hex}.tmp"
 
-        total = 0
         try:
-            with open(temp_path, "wb") as file:
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    total += len(chunk)
-                    if total > MAX_PREVIEW_BYTES:
-                        msg = "Preview response is too large"
-                        raise PreviewCacheFetchError(msg)
-                    file.write(chunk)
+            _write_response_body(response, temp_path)
             temp_path.replace(target_path)
         finally:
             temp_path.unlink(missing_ok=True)
 
         _remove_other_index_files(cache_dir, index, target_path)
-        return target_path
     except requests.RequestException as exc:
         raise PreviewCacheFetchError(str(exc)) from exc
+    else:
+        return target_path
     finally:
         close = getattr(response, "close", None)
         if close is not None:
             close()
+
+
+def _validate_content_length(content_length: str | None) -> None:
+    if content_length is None:
+        return
+    try:
+        too_large = int(content_length) > MAX_PREVIEW_BYTES
+    except ValueError:
+        return
+    if too_large:
+        msg = "Preview response is too large"
+        raise PreviewCacheFetchError(msg)
+
+
+def _write_response_body(response: requests.Response, temp_path: Path) -> None:
+    total = 0
+    with temp_path.open("wb") as file:
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_PREVIEW_BYTES:
+                msg = "Preview response is too large"
+                raise PreviewCacheFetchError(msg)
+            file.write(chunk)
 
 
 def _normalized_content_type(value: str) -> str:

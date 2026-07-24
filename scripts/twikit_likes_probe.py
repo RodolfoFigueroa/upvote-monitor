@@ -8,7 +8,8 @@ Examples:
     $env:X_COOKIES_JSON = '{"auth_token":"...","ct0":"...","twid":"u%3D123"}'
     uv run python scripts/twikit_likes_probe.py --pages 1 --count 20
 
-    uv run python scripts/twikit_likes_probe.py --cookies-file cookies.json --username some_handle
+    uv run python scripts/twikit_likes_probe.py \
+        --cookies-file cookies.json --username some_handle
 
 Cookie files may be simple JSON objects, for example:
     {"auth_token": "...", "ct0": "...", "twid": "u%3D123"}
@@ -22,15 +23,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
 import requests
 
+if TYPE_CHECKING:
+    from pydantic import JsonValue
+
 DOMAIN = "x.com"
-BEARER_TOKEN = (
+BEARER_CREDENTIAL = (
     "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
     "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
@@ -91,7 +96,9 @@ USER_FEATURES = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fetch a small sample of X/Twitter liked tweets via direct web GraphQL.",
+        description=(
+            "Fetch a small sample of X/Twitter liked tweets via direct web GraphQL."
+        ),
     )
     parser.add_argument(
         "--cookies-file",
@@ -145,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def normalize_cookies(raw: Any) -> dict[str, str]:
+def normalize_cookies(raw: JsonValue) -> dict[str, str]:
     if isinstance(raw, dict):
         cookies = raw.get("cookies", raw)
         if isinstance(cookies, list):
@@ -188,7 +195,8 @@ def load_cookies(args: argparse.Namespace) -> dict[str, str]:
     missing = {"auth_token", "ct0"} - cookies.keys()
     if missing:
         missing_list = ", ".join(sorted(missing))
-        raise ValueError(f"cookie data is missing required cookie(s): {missing_list}")
+        msg_0 = f"cookie data is missing required cookie(s): {missing_list}"
+        raise ValueError(msg_0)
     return cookies
 
 
@@ -213,7 +221,7 @@ def flatten_params(params: dict[str, Any]) -> dict[str, str]:
     return flattened
 
 
-def find_values(obj: Any, key: str) -> list[Any]:
+def find_values(obj: JsonValue, key: str) -> list[JsonValue]:
     results = []
     if isinstance(obj, dict):
         if key in obj:
@@ -231,7 +239,7 @@ def build_session(cookies: dict[str, str], user_agent: str) -> requests.Session:
     session.cookies.update(cookies)
     session.headers.update(
         {
-            "authorization": f"Bearer {BEARER_TOKEN}",
+            "authorization": f"Bearer {BEARER_CREDENTIAL}",
             "content-type": "application/json",
             "x-twitter-auth-type": "OAuth2Session",
             "x-twitter-active-user": "yes",
@@ -254,14 +262,17 @@ def get_json(
     try:
         data = response.json()
     except requests.JSONDecodeError as exc:
+        msg = f"X returned non-JSON response with status {response.status_code}"
         raise RuntimeError(
-            f"X returned non-JSON response with status {response.status_code}",
+            msg,
         ) from exc
 
     if response.status_code >= 400:
-        raise RuntimeError(f"X returned HTTP {response.status_code}: {data}")
+        msg = f"X returned HTTP {response.status_code}: {data}"
+        raise RuntimeError(msg)
     if isinstance(data, dict) and data.get("errors"):
-        raise RuntimeError(f"X returned GraphQL errors: {data['errors']}")
+        msg = f"X returned GraphQL errors: {data['errors']}"
+        raise RuntimeError(msg)
     return data
 
 
@@ -280,7 +291,8 @@ def user_by_screen_name(session: requests.Session, screen_name: str) -> tuple[st
     data = get_json(session, USER_BY_SCREEN_NAME_URL, params=params)
     user_data = data.get("data", {}).get("user", {}).get("result")
     if not user_data:
-        raise RuntimeError(f"X did not return user data for @{clean_name}")
+        msg = f"X did not return user data for @{clean_name}"
+        raise RuntimeError(msg)
     user_legacy = user_data.get("legacy", {})
     return str(user_data["rest_id"]), str(user_legacy.get("screen_name") or clean_name)
 
@@ -295,7 +307,8 @@ def authenticated_user(session: requests.Session) -> tuple[str, str]:
             errors.append(f"{settings_url}: {exc}")
     else:
         joined_errors = "; ".join(errors)
-        raise RuntimeError(f"could not discover authenticated X user: {joined_errors}")
+        msg = f"could not discover authenticated X user: {joined_errors}"
+        raise RuntimeError(msg)
 
     screen_name = settings.get("screen_name")
     if not screen_name:
@@ -424,39 +437,52 @@ def extract_cursor(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def tweets_from_likes_response(
-    data: dict[str, Any],
-) -> tuple[list[dict[str, Any]], str | None]:
-    instructions_list = find_values(data, "instructions")
-    if not instructions_list:
-        return [], None
-
+def _timeline_entries(data: dict[str, Any]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for instructions in instructions_list:
+    for instructions in find_values(data, "instructions"):
         if not isinstance(instructions, list):
             continue
         for instruction in instructions:
             if isinstance(instruction, dict):
-                entries.extend(instruction.get("entries", []))
+                raw_entries = instruction.get("entries", [])
+                if isinstance(raw_entries, list):
+                    entries.extend(
+                        entry for entry in raw_entries if isinstance(entry, dict)
+                    )
+    return entries
 
-    tweets = []
+
+def _tweet_item_from_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    entry_id = entry.get("entryId", "")
+    if not isinstance(entry_id, str) or not entry_id.startswith(
+        ("tweet", "profile-conversation", "profile-grid"),
+    ):
+        return None
+    if not entry_id.startswith("profile-conversation"):
+        return entry
+    content = entry.get("content", {})
+    if not isinstance(content, dict):
+        return None
+    conversation_items = content.get("items", [])
+    if not isinstance(conversation_items, list) or not conversation_items:
+        return None
+    first_item = conversation_items[0]
+    return first_item if isinstance(first_item, dict) else None
+
+
+def tweets_from_likes_response(
+    data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    tweets: list[dict[str, Any]] = []
     next_cursor = None
-    for entry in entries:
+    for entry in _timeline_entries(data):
         cursor = extract_cursor(entry)
         if cursor:
             next_cursor = cursor
 
-        entry_id = entry.get("entryId", "")
-        if not entry_id.startswith(("tweet", "profile-conversation", "profile-grid")):
+        item = _tweet_item_from_entry(entry)
+        if item is None:
             continue
-
-        item = entry
-        if entry_id.startswith("profile-conversation"):
-            conversation_items = entry.get("content", {}).get("items", [])
-            if not conversation_items:
-                continue
-            item = conversation_items[0]
-
         tweet_data = raw_tweet_from_entry(item)
         if tweet_data is not None:
             tweets.append(raw_tweet_to_dict(tweet_data))
@@ -545,15 +571,15 @@ def main() -> int:
     args = parse_args()
     try:
         payload = fetch_likes(args)
-    except Exception as exc:  # noqa: BLE001 - this probe should show auth/API breakage plainly.
-        print(
-            json.dumps(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2
-            ),
-        )
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        error_payload = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        sys.stderr.write(f"{json.dumps(error_payload, indent=2)}\n")
         return 2
 
-    print(json.dumps({"ok": True, **payload}, indent=2))
+    sys.stdout.write(f"{json.dumps({'ok': True, **payload}, indent=2)}\n")
     return 0
 
 

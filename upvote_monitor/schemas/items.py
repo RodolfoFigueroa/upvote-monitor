@@ -32,6 +32,13 @@ from upvote_monitor.services.tagging.analysis import (
 )
 
 
+def _persisted_attachment_id(attachment: MediaAttachment) -> int:
+    if attachment.id is None:
+        msg = "Media attachment must be persisted before serialization"
+        raise ValueError(msg)
+    return attachment.id
+
+
 class MediaAttachmentResponse(BaseModel):
     id: int
     item_id: str
@@ -56,9 +63,9 @@ class MediaAttachmentResponse(BaseModel):
         attachment: MediaAttachment,
         session: Session,
     ) -> "MediaAttachmentResponse":
-        assert attachment.id is not None
+        attachment_id = _persisted_attachment_id(attachment)
         return cls(
-            id=attachment.id,
+            id=attachment_id,
             item_id=attachment.item_id,
             sort_index=attachment.sort_index,
             media_type=attachment.media_type,
@@ -73,12 +80,12 @@ class MediaAttachmentResponse(BaseModel):
             approval_status=approval_status_api(attachment.approval_status),
             illustration_label=attachment.illustration_label.value,
             analysis=MediaAnalysisResponse.from_db(
-                get_attachment_analysis(session, attachment.id),
+                get_attachment_analysis(session, attachment_id),
                 session,
             ),
             analyses=[
                 MediaAnalysisResponse.from_analysis(analysis, session)
-                for analysis in get_attachment_analyses(session, attachment.id)
+                for analysis in get_attachment_analyses(session, attachment_id)
             ],
         )
 
@@ -265,7 +272,7 @@ class MediaItemResponse(BaseModel):
         item: ReviewItem,
         session: Session,
     ) -> "MediaItemResponse":
-        assert attachment.id is not None
+        attachment_id = _persisted_attachment_id(attachment)
         preview_url = attachment.preview_url or attachment.download_url
         localized_preview_url = localize_preview_url(
             item.id,
@@ -274,7 +281,7 @@ class MediaItemResponse(BaseModel):
             preview_url,
         )
         return cls(
-            id=attachment.id,
+            id=attachment_id,
             item_id=item.id,
             item_title=item.title,
             source=item.source,
@@ -302,12 +309,12 @@ class MediaItemResponse(BaseModel):
             approval_status=approval_status_api(attachment.approval_status),
             illustration_label=attachment.illustration_label.value,
             analysis=MediaAnalysisResponse.from_db(
-                get_attachment_analysis(session, attachment.id),
+                get_attachment_analysis(session, attachment_id),
                 session,
             ),
             analyses=[
                 MediaAnalysisResponse.from_analysis(analysis, session)
-                for analysis in get_attachment_analyses(session, attachment.id)
+                for analysis in get_attachment_analyses(session, attachment_id)
             ],
         )
 

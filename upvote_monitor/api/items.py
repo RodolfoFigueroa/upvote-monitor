@@ -1,10 +1,12 @@
 import mimetypes
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlmodel import Session, col, select
 
@@ -27,7 +29,7 @@ from upvote_monitor.services.media_workflow import (
 )
 from upvote_monitor.services.preview_cache import (
     PreviewCacheFetchError,
-    PreviewCacheNotFound,
+    PreviewCacheNotFoundError,
     get_or_fetch_cached_preview,
     preview_media_type,
 )
@@ -44,6 +46,16 @@ _APPROVAL_FILTER = {
     "approved": ApprovalStatus.APPROVED,
     "under_review": ApprovalStatus.UNDER_REVIEW,
 }
+
+
+class ItemListFilters(BaseModel):
+    approval_status: str | None = None
+    download_status: str | None = None
+    source: list[str] | None = None
+    community: str | None = None
+    author: str | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
 
 
 def _get_item_or_404(session: Session, item_id: str) -> ReviewItem:
@@ -63,31 +75,25 @@ def _file_response_item(item_id: str, path: Path) -> ItemFile:
     )
 
 
-@router.get("", response_model=ItemListResponse)
+@router.get("")
 def list_items(
-    session: Session = Depends(get_db_session),
-    approval_status: str | None = Query(default=None),
-    download_status: str | None = Query(default=None),
-    source: list[str] | None = Query(default=None),
-    community: str | None = Query(default=None),
-    author: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    session: Annotated[Session, Depends(get_db_session)],
+    filters: Annotated[ItemListFilters, Query()],
 ) -> ItemListResponse:
     query = select(ReviewItem)
     count_query = select(func.count()).select_from(ReviewItem)
-    sources = [value.strip() for value in source or [] if value.strip()]
+    sources = [value.strip() for value in filters.source or [] if value.strip()]
 
-    if approval_status is not None:
-        if approval_status not in _APPROVAL_FILTER:
+    if filters.approval_status is not None:
+        if filters.approval_status not in _APPROVAL_FILTER:
             raise HTTPException(status_code=422, detail="Invalid approval_status")
-        status = _APPROVAL_FILTER[approval_status]
+        status = _APPROVAL_FILTER[filters.approval_status]
         query = query.where(ReviewItem.approval_status == status)
         count_query = count_query.where(ReviewItem.approval_status == status)
 
-    if download_status is not None:
+    if filters.download_status is not None:
         try:
-            dl_status = DownloadStatus(download_status)
+            dl_status = DownloadStatus(filters.download_status)
         except ValueError as exc:
             raise HTTPException(
                 status_code=422,
@@ -103,25 +109,29 @@ def list_items(
 
     normalization_source = sources[0] if len(sources) == 1 else None
 
-    if community is not None:
+    if filters.community is not None:
         normalized = normalize_rule_target(
             normalization_source or "reddit",
             RuleTargetType.COMMUNITY,
-            community,
+            filters.community,
         )
         query = query.where(ReviewItem.community_name == normalized)
         count_query = count_query.where(ReviewItem.community_name == normalized)
 
-    if author is not None:
+    if filters.author is not None:
         normalized = normalize_rule_target(
             normalization_source or "",
             RuleTargetType.AUTHOR,
-            author,
+            filters.author,
         )
         query = query.where(ReviewItem.author_name == normalized)
         count_query = count_query.where(ReviewItem.author_name == normalized)
 
-    query = query.order_by(desc(col(ReviewItem.created_at))).offset(offset).limit(limit)
+    query = (
+        query.order_by(desc(col(ReviewItem.created_at)))
+        .offset(filters.offset)
+        .limit(filters.limit)
+    )
 
     items = session.exec(query).all()
     total = session.exec(count_query).one()
@@ -129,25 +139,25 @@ def list_items(
     return ItemListResponse(
         items=[ItemSummary.from_db(item, session) for item in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=filters.limit,
+        offset=filters.offset,
     )
 
 
-@router.get("/{item_id}", response_model=ItemDetail)
+@router.get("/{item_id}")
 def get_item(
     item_id: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     return ItemDetail.from_db(item, session)
 
 
-@router.post("/{item_id}/analyze", response_model=ItemDetail)
+@router.post("/{item_id}/analyze")
 def analyze_item_endpoint(
     item_id: str,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     try:
@@ -164,11 +174,11 @@ def analyze_item_endpoint(
     return ItemDetail.from_db(item, session)
 
 
-@router.post("/{item_id}/approve", response_model=ItemDetail)
+@router.post("/{item_id}/approve")
 def approve_item(
     item_id: str,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     item = set_item_media_approval(session, item, ApprovalStatus.APPROVED)
@@ -180,10 +190,10 @@ def approve_item(
     return ItemDetail.from_db(item, session)
 
 
-@router.post("/{item_id}/reject", response_model=ItemDetail)
+@router.post("/{item_id}/reject")
 def reject_item(
     item_id: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     item = set_item_media_approval(session, item, ApprovalStatus.REJECTED)
@@ -192,10 +202,10 @@ def reject_item(
     return ItemDetail.from_db(item, session)
 
 
-@router.post("/{item_id}/reopen-rejected", response_model=ItemDetail)
+@router.post("/{item_id}/reopen-rejected")
 def reopen_rejected_media(
     item_id: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     try:
@@ -209,11 +219,11 @@ def reopen_rejected_media(
     return ItemDetail.from_db(item, session)
 
 
-@router.post("/{item_id}/retry-download", response_model=ItemDetail)
+@router.post("/{item_id}/retry-download")
 def retry_download(
     item_id: str,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
     if item.approval_status != ApprovalStatus.APPROVED:
@@ -234,8 +244,8 @@ def retry_download(
 @router.get("/{item_id}/preview/{index}")
 def get_item_preview(
     item_id: str,
-    index: int = PathParam(ge=0),
-    session: Session = Depends(get_db_session),
+    index: Annotated[int, PathParam(ge=0)],
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> FileResponse:
     item = _get_item_or_404(session, item_id)
     if item.approval_status != ApprovalStatus.UNDER_REVIEW:
@@ -247,7 +257,7 @@ def get_item_preview(
 
     try:
         file_path = get_or_fetch_cached_preview(item.id, index, preview_urls[index])
-    except PreviewCacheNotFound as exc:
+    except PreviewCacheNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Preview not found") from exc
     except PreviewCacheFetchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -259,7 +269,7 @@ def get_item_preview(
 def get_item_media(
     item_id: str,
     filename: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> FileResponse:
     if "/" in filename or "\\" in filename or filename in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -280,10 +290,10 @@ def get_item_media(
     return FileResponse(file_path, media_type=media_type or "application/octet-stream")
 
 
-@router.get("/{item_id}/files", response_model=ItemFilesResponse)
+@router.get("/{item_id}/files")
 def list_item_files(
     item_id: str,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemFilesResponse:
     item = _get_item_or_404(session, item_id)
     if item.download_dir is None:

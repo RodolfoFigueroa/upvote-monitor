@@ -4,12 +4,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import onnxruntime as ort
 from huggingface_hub import hf_hub_download
 from PIL import Image
+from pydantic import JsonValue
 
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult
 
@@ -53,8 +53,9 @@ class PixAITagger:
         self.cache_dir = cache_dir
 
         if repo_id not in PIXAI_COMPATIBLE_MODEL_REPOS:
+            msg = f"Model repo is not supported by the PixAI tagger: {repo_id}"
             raise ValueError(
-                f"Model repo is not supported by the PixAI tagger: {repo_id}",
+                msg,
             )
 
         model_path = _download_model_file(
@@ -145,7 +146,7 @@ def _download_model_file(
 
 
 def _load_labels(path: Path) -> list[PixAITagLabel]:
-    with open(path, newline="", encoding="utf-8") as file:
+    with path.open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         labels: list[PixAITagLabel] = []
         for row in reader:
@@ -156,8 +157,8 @@ def _load_labels(path: Path) -> list[PixAITagLabel]:
 
 
 def _load_preprocess_config(path: Path) -> PixAIPreprocessConfig:
-    with open(path, encoding="utf-8") as file:
-        raw = json.load(file)
+    with path.open(encoding="utf-8") as file:
+        raw: JsonValue = json.load(file)
 
     size = 448
     mean = (0.5, 0.5, 0.5)
@@ -174,7 +175,7 @@ def _load_preprocess_config(path: Path) -> PixAIPreprocessConfig:
     return PixAIPreprocessConfig(size=size, mean=mean, std=std)
 
 
-def _preprocess_stages(raw: Any) -> list[dict[str, Any]]:
+def _preprocess_stages(raw: JsonValue) -> list[dict[str, JsonValue]]:
     if not isinstance(raw, dict):
         return []
     stages = raw.get("stages")
@@ -183,7 +184,7 @@ def _preprocess_stages(raw: Any) -> list[dict[str, Any]]:
     return [stage for stage in stages if isinstance(stage, dict)]
 
 
-def _preprocess_size(value: Any) -> int | None:
+def _preprocess_size(value: JsonValue) -> int | None:
     if isinstance(value, int) and value > 0:
         return value
     if (
@@ -196,7 +197,7 @@ def _preprocess_size(value: Any) -> int | None:
     return None
 
 
-def _float_triplet(value: Any) -> tuple[float, float, float] | None:
+def _float_triplet(value: JsonValue) -> tuple[float, float, float] | None:
     if not isinstance(value, list) or len(value) != 3:
         return None
     result: list[float] = []
@@ -252,8 +253,19 @@ def _preprocess_image(
     return np.expand_dims(array, axis=0)
 
 
-def _classification_scores(outputs: Sequence[Any], *, label_count: int) -> np.ndarray:
-    flattened_outputs = [np.asarray(output).reshape(-1) for output in outputs]
+def _classification_scores(
+    outputs: Sequence[
+        np.ndarray | ort.SparseTensor | list[object] | dict[object, object]
+    ],
+    *,
+    label_count: int,
+) -> np.ndarray:
+    flattened_outputs = []
+    for output in outputs:
+        if isinstance(output, (ort.SparseTensor, dict)):
+            msg = "PixAI ONNX sparse or map outputs are not supported"
+            raise TypeError(msg)
+        flattened_outputs.append(np.asarray(output).reshape(-1))
     for output in flattened_outputs:
         if output.size == label_count:
             return output
@@ -261,9 +273,12 @@ def _classification_scores(outputs: Sequence[Any], *, label_count: int) -> np.nd
         return flattened_outputs[0]
 
     sizes = ", ".join(str(output.size) for output in flattened_outputs)
-    raise ValueError(
+    msg = (
         "PixAI ONNX outputs did not include classification scores "
-        f"for {label_count} labels; output sizes were: {sizes}",
+        f"for {label_count} labels; output sizes were: {sizes}"
+    )
+    raise ValueError(
+        msg,
     )
 
 

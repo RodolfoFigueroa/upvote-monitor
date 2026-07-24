@@ -4,12 +4,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from upvote_monitor.api.items import list_item_files, list_items
+from upvote_monitor.api.items import ItemListFilters, list_item_files, list_items
 from upvote_monitor.api.settings import update_settings
 from upvote_monitor.db import engine as db_engine_module
 from upvote_monitor.db.models import (
@@ -30,14 +31,17 @@ from upvote_monitor.models.metadata import (
 )
 from upvote_monitor.schemas.items import ItemDetail
 from upvote_monitor.schemas.settings import SettingsUpdate
+from upvote_monitor.services import preview_cache
 from upvote_monitor.services.download import claim_item_for_download
 from upvote_monitor.services.refresh import (
     RefreshAlreadyRunningError,
     create_refresh_run,
     execute_refresh_run,
 )
-from upvote_monitor.services.secrets import SecretStore, SecretStoreUnavailable
+from upvote_monitor.services.secrets import SecretStore, SecretStoreUnavailableError
 from upvote_monitor.services.source_settings import REDDIT_SOURCE, X_SOURCE
+
+ENCRYPTION_KEY = "test-encryption-key"
 
 
 @pytest.fixture
@@ -254,8 +258,6 @@ def test_init_db_reports_new_blank_database_once(
         lambda _download_base_dir: None,
     )
 
-    from upvote_monitor.services import preview_cache
-
     monkeypatch.setattr(
         preview_cache,
         "PREVIEW_CACHE_DIR",
@@ -307,13 +309,7 @@ def test_item_list_filters_multiple_sources(engine: Engine) -> None:
 
         response = list_items(
             session=session,
-            approval_status=None,
-            download_status=None,
-            source=[REDDIT_SOURCE, X_SOURCE],
-            community=None,
-            author=None,
-            limit=20,
-            offset=0,
+            filters=ItemListFilters(source=[REDDIT_SOURCE, X_SOURCE]),
         )
 
     assert response.total == 2
@@ -336,7 +332,7 @@ def test_item_detail_uses_attachment_urls(engine: Engine) -> None:
 
 def test_secret_store_encrypts_source_secrets(tmp_path: Path) -> None:
     secret_path = tmp_path / "secrets.enc"
-    store = SecretStore(secret_key="plain text key", path=secret_path)
+    store = SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     store.update_source_secrets(
         REDDIT_SOURCE,
@@ -358,7 +354,7 @@ def test_secret_store_requires_key(tmp_path: Path) -> None:
     store = SecretStore(secret_key=None, path=tmp_path / "secrets.enc")
 
     assert store.available is False
-    with pytest.raises(SecretStoreUnavailable):
+    with pytest.raises(SecretStoreUnavailableError):
         store.read_all()
 
 
@@ -370,7 +366,7 @@ def test_settings_update_stores_reddit_secret_write_only(
     secret_path = tmp_path / "secrets.enc"
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="settings-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
     probe_calls = []
@@ -454,7 +450,7 @@ def test_settings_update_stores_x_secrets_write_only(
     secret_path = tmp_path / "secrets.enc"
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="settings-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
     probe_calls = []
@@ -500,8 +496,10 @@ def test_settings_update_stores_x_secrets_write_only(
 
         assert response.sources.x.enabled is True
         assert response.sources.x.auth_token_configured is True
-        assert response.sources.x.auth_token_prefix == "secr"
-        assert response.sources.x.auth_token_suffix == "auth"
+        expected_start = "secr"
+        expected_end = "auth"
+        assert response.sources.x.auth_token_prefix == expected_start
+        assert response.sources.x.auth_token_suffix == expected_end
         assert response.sources.x.ct0_configured is True
         assert response.sources.x.ct0_prefix == "secr"
         assert response.sources.x.ct0_suffix == "csrf"
@@ -548,7 +546,7 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
     secret_path = tmp_path / "secrets.enc"
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="settings-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
@@ -573,7 +571,7 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
         )
         session.commit()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
                     {
@@ -602,7 +600,7 @@ def test_settings_update_rejects_enabled_x_missing_twid(
     secret_path = tmp_path / "secrets.enc"
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="settings-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
@@ -627,7 +625,7 @@ def test_settings_update_rejects_enabled_x_missing_twid(
         )
         session.commit()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
                     {
@@ -660,7 +658,7 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
     secret_path = tmp_path / "secrets.enc"
 
     def store_factory() -> SecretStore:
-        return SecretStore(secret_key="settings-key", path=secret_path)
+        return SecretStore(secret_key=ENCRYPTION_KEY, path=secret_path)
 
     monkeypatch.setattr("upvote_monitor.api.settings.SecretStore", store_factory)
 
@@ -685,7 +683,7 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
         )
         session.commit()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
                     {
@@ -770,7 +768,7 @@ def test_settings_update_rejects_secret_without_key(
         )
         session.commit()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
                     {"sources": {"reddit": {"session_cookie": "secret-cookie"}}},

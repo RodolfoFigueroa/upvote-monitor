@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
 
@@ -78,18 +80,18 @@ def _find_rule(
     ).first()
 
 
-@router.get("", response_model=RuleListsResponse)
+@router.get("")
 def get_rules(
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RuleListsResponse:
     return _load_lists(session)
 
 
-@router.post("/whitelist", response_model=RuleListsResponse)
+@router.post("/whitelist")
 def add_to_whitelist(
     body: RuleEntryRequest,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RuleListsResponse:
     existing = _find_rule(session, ListType.WHITELIST, body)
     if existing is None:
@@ -109,14 +111,13 @@ def add_to_whitelist(
 
 @router.delete(
     "/whitelist/{source}/{target_type}/{target_value}",
-    response_model=RuleListsResponse,
 )
 def remove_from_whitelist(
     source: str,
     target_type: RuleTargetType,
     target_value: str,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RuleListsResponse:
     body = RuleEntryRequest(
         source=source,
@@ -132,11 +133,11 @@ def remove_from_whitelist(
     return _load_lists(session)
 
 
-@router.post("/blacklist", response_model=RuleListsResponse)
+@router.post("/blacklist")
 def add_to_blacklist(
     body: RuleEntryRequest,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RuleListsResponse:
     existing = _find_rule(session, ListType.BLACKLIST, body)
     if existing is None:
@@ -156,14 +157,13 @@ def add_to_blacklist(
 
 @router.delete(
     "/blacklist/{source}/{target_type}/{target_value}",
-    response_model=RuleListsResponse,
 )
 def remove_from_blacklist(
     source: str,
     target_type: RuleTargetType,
     target_value: str,
     background_tasks: BackgroundTasks,
-    session: Session = Depends(get_db_session),
+    session: Annotated[Session, Depends(get_db_session)],
 ) -> RuleListsResponse:
     body = RuleEntryRequest(
         source=source,

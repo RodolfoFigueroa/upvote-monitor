@@ -29,7 +29,7 @@ def download_file_from_url(
         suffix = mimetypes.guess_extension(content_type.strip().lower()) or ""
 
     path = path.with_suffix(suffix)
-    with open(path, "wb") as f:
+    with path.open("wb") as f:
         f.write(response.content)
 
 

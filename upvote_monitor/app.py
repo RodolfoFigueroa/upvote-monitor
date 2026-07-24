@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,7 +20,7 @@ __all__ = ["app", "create_app", "settings"]
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     set_event_loop(asyncio.get_running_loop())
     should_queue_initial_refresh = init_db()
     start_scheduler()

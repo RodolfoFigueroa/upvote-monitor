@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import NotRequired, Protocol, TypedDict, Unpack
 
 from sqlmodel import Session, col, select
 
@@ -18,6 +18,7 @@ from upvote_monitor.db.models import (
 from upvote_monitor.enums import AnalysisStatus, ApprovalStatus
 from upvote_monitor.services.media_workflow import set_media_decision
 from upvote_monitor.services.preview_cache import (
+    PreviewCacheError,
     get_or_fetch_cached_preview,
     is_cacheable_preview_url,
 )
@@ -58,6 +59,20 @@ class ItemAnalysisSummary:
     illustration_score: float | None
 
 
+@dataclass(frozen=True)
+class AnalyzeItemOptions:
+    force: bool
+    auto_approve_threshold: float | None
+
+
+class AnalysisResultOptions(TypedDict):
+    illustration_score: NotRequired[float | None]
+    general_tags_json: NotRequired[str]
+    character_tags_json: NotRequired[str]
+    ratings_json: NotRequired[str]
+    error: NotRequired[str | None]
+
+
 def process_pending_analysis(
     session: Session,
     tagger: ImageTagger | None = None,
@@ -91,11 +106,13 @@ def process_pending_analysis(
             item,
             profile,
             tagger,
-            force=False,
-            auto_approve_threshold=(
-                profile.auto_approve_threshold
-                if settings.illustration_auto_approve_enabled
-                else None
+            AnalyzeItemOptions(
+                force=False,
+                auto_approve_threshold=(
+                    profile.auto_approve_threshold
+                    if settings.illustration_auto_approve_enabled
+                    else None
+                ),
             ),
         )
         result.analyzed += item_result.analyzed
@@ -125,8 +142,7 @@ def analyze_item(
         item,
         profile,
         tagger,
-        force=True,
-        auto_approve_threshold=None,
+        AnalyzeItemOptions(force=True, auto_approve_threshold=None),
     )
     session.commit()
     return result
@@ -260,9 +276,7 @@ def _analyze_item(
     item: ReviewItem,
     profile: AnalysisProfile,
     tagger: ImageTagger,
-    *,
-    force: bool,
-    auto_approve_threshold: float | None,
+    options: AnalyzeItemOptions,
 ) -> AnalysisBatchResult:
     result = AnalysisBatchResult()
     attachments = _image_attachments_for_item(session, item.id)
@@ -271,12 +285,12 @@ def _analyze_item(
         if attachment.id is None:
             continue
         existing = _existing_analysis(session, attachment.id, profile)
-        if existing is not None and not force:
+        if existing is not None and not options.force:
             if _maybe_auto_approve_attachment(
                 session,
                 attachment,
                 existing.illustration_score,
-                auto_approve_threshold,
+                options.auto_approve_threshold,
             ):
                 result.approved += 1
             continue
@@ -299,7 +313,7 @@ def _analyze_item(
                 session,
                 attachment,
                 analysis.illustration_score,
-                auto_approve_threshold,
+                options.auto_approve_threshold,
             ):
                 result.approved += 1
         elif analysis.status == AnalysisStatus.SKIPPED:
@@ -328,11 +342,14 @@ def _analyze_attachment(
     profile: AnalysisProfile,
     tagger: ImageTagger,
 ) -> MediaAnalysis:
-    assert attachment.id is not None
+    if attachment.id is None:
+        msg = "Media attachment must be persisted before analysis"
+        raise ValueError(msg)
+    attachment_id = attachment.id
     preview_url = attachment.preview_url or attachment.download_url
     if not is_cacheable_preview_url(preview_url):
         return _analysis_result(
-            attachment.id,
+            attachment_id,
             profile,
             AnalysisStatus.SKIPPED,
             error="Preview URL is not cacheable",
@@ -345,9 +362,9 @@ def _analyze_attachment(
             preview_url,
         )
         tagger_result = tagger.tag_image(image_path)
-    except Exception as exc:
+    except (OSError, PreviewCacheError, RuntimeError, ValueError) as exc:
         return _analysis_result(
-            attachment.id,
+            attachment_id,
             profile,
             AnalysisStatus.FAILED,
             error=str(exc),
@@ -367,7 +384,7 @@ def _analyze_attachment(
         threshold=profile.character_tag_storage_threshold,
     )
     return _analysis_result(
-        attachment.id,
+        attachment_id,
         profile,
         AnalysisStatus.COMPLETED,
         illustration_score=score,
@@ -384,12 +401,7 @@ def _analysis_result(
     attachment_id: int,
     profile: AnalysisProfile,
     status: AnalysisStatus,
-    *,
-    illustration_score: float | None = None,
-    general_tags_json: str = "{}",
-    character_tags_json: str = "{}",
-    ratings_json: str = "{}",
-    error: str | None = None,
+    **options: Unpack[AnalysisResultOptions],
 ) -> MediaAnalysis:
     return MediaAnalysis(
         attachment_id=attachment_id,
@@ -398,11 +410,11 @@ def _analysis_result(
         model_version=profile.model_version,
         scoring_version=profile.scoring_version,
         status=status,
-        illustration_score=illustration_score,
-        general_tags_json=general_tags_json,
-        character_tags_json=character_tags_json,
-        ratings_json=ratings_json,
-        error=error,
+        illustration_score=options.get("illustration_score"),
+        general_tags_json=options.get("general_tags_json", "{}"),
+        character_tags_json=options.get("character_tags_json", "{}"),
+        ratings_json=options.get("ratings_json", "{}"),
+        error=options.get("error"),
         analyzed_at=datetime.now(UTC),
     )
 

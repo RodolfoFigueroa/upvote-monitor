@@ -54,7 +54,8 @@ class WDTagger:
         self.cache_dir = cache_dir
 
         if repo_id not in WD_COMPATIBLE_MODEL_REPOS:
-            raise ValueError(f"Model repo is not supported by the WD tagger: {repo_id}")
+            msg = f"Model repo is not supported by the WD tagger: {repo_id}"
+            raise ValueError(msg)
 
         model_path = _download_model_file(
             repo_id,
@@ -132,7 +133,7 @@ def _download_model_file(
 
 
 def _load_labels(path: Path) -> list[TagLabel]:
-    with open(path, newline="", encoding="utf-8") as file:
+    with path.open(newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         labels: list[TagLabel] = []
         for row in reader:

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, Field, field_validator
 
@@ -5,8 +7,8 @@ from upvote_monitor.db.models import AnalysisProfile, AppSettings, SourceSetting
 from upvote_monitor.enums import ApprovalMode
 from upvote_monitor.services.secrets import (
     SecretStore,
-    SecretStoreInvalid,
-    SecretStoreUnavailable,
+    SecretStoreInvalidError,
+    SecretStoreUnavailableError,
 )
 from upvote_monitor.services.source_settings import (
     REDDIT_MAX_PAGE_LIMIT,
@@ -29,7 +31,7 @@ def _reddit_username_from_secret_store(secret_store: SecretStore) -> str:
         return (
             secret_store.get_source_secrets(REDDIT_SOURCE).get("username", "").strip()
         )
-    except (SecretStoreInvalid, SecretStoreUnavailable):
+    except (SecretStoreInvalidError, SecretStoreUnavailableError):
         return ""
 
 
@@ -310,10 +312,7 @@ class SettingsUpdate(BaseModel):
     @field_validator("download_base_dir")
     @classmethod
     def validate_absolute_path(cls, value: str | None) -> str | None:
-        if value is not None:
-            from pathlib import Path
-
-            if not Path(value).is_absolute():
-                msg = "download_base_dir must be an absolute path"
-                raise ValueError(msg)
+        if value is not None and not Path(value).is_absolute():
+            msg = "download_base_dir must be an absolute path"
+            raise ValueError(msg)
         return value

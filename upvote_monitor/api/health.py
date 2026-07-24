@@ -8,6 +8,6 @@ class HealthResponse(BaseModel):
     status: str
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health")
 def health() -> HealthResponse:
     return HealthResponse(status="ok")

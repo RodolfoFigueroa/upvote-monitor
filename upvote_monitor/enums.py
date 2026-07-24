@@ -1,4 +1,4 @@
-from enum import Enum, IntEnum
+from enum import IntEnum, StrEnum
 
 
 class ApprovalStatus(IntEnum):
@@ -7,47 +7,47 @@ class ApprovalStatus(IntEnum):
     UNDER_REVIEW = 2
 
 
-class IllustrationLabel(str, Enum):
+class IllustrationLabel(StrEnum):
     UNLABELED = "unlabeled"
     YES = "yes"
     NO = "no"
     UNSURE = "unsure"
 
 
-class DownloadStatus(str, Enum):
+class DownloadStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
 
 
-class DownloadStrategy(str, Enum):
+class DownloadStrategy(StrEnum):
     HTTP = "http"
     YT_DLP = "yt_dlp"
 
 
-class AnalysisStatus(str, Enum):
+class AnalysisStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
 
 
-class ApprovalMode(str, Enum):
+class ApprovalMode(StrEnum):
     AUTO = "auto"
     MANUAL = "manual"
 
 
-class ListType(str, Enum):
+class ListType(StrEnum):
     WHITELIST = "whitelist"
     BLACKLIST = "blacklist"
 
 
-class RuleTargetType(str, Enum):
+class RuleTargetType(StrEnum):
     COMMUNITY = "community"
     AUTHOR = "author"
 
 
-class RefreshRunStatus(str, Enum):
+class RefreshRunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
