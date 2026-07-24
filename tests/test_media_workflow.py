@@ -1,7 +1,8 @@
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
@@ -23,8 +24,6 @@ from upvote_monitor.services.media_workflow import (
     attachment_counts,
     set_media_decision,
 )
-
-import pytest
 
 
 @pytest.fixture
@@ -57,7 +56,7 @@ def make_item(
         community_label="r/art",
         item_kind="gallery",
         source_url=f"https://reddit.com/r/art/comments/{item_id}/item/",
-        created_at=created_at or datetime.now(timezone.utc),
+        created_at=created_at or datetime.now(UTC),
         approval_status=approval_status,
         download_status=download_status,
         raw_data_json="{}",
@@ -92,7 +91,7 @@ def add_settings(session: Session, tmp_path: Path) -> None:
             refresh_cron="0 */6 * * *",
             refresh_enabled=True,
             download_base_dir=str(tmp_path),
-        )
+        ),
     )
 
 
@@ -238,7 +237,7 @@ def test_approval_media_update_broadcasts_queue_change(
                     "media_id": attachment.id,
                     "reason": "media_decision",
                 },
-            )
+            ),
         ]
 
 
@@ -273,7 +272,7 @@ def test_media_api_cursor_pages_are_ordered_and_non_overlapping(
     engine: Engine,
 ) -> None:
     with Session(engine) as session:
-        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        created_at = datetime(2026, 1, 1, tzinfo=UTC)
         first_item = make_item("cursor-a", created_at=created_at)
         second_item = make_item("cursor-b", created_at=created_at)
         session.add(first_item)
@@ -323,7 +322,7 @@ def test_media_api_cursor_continues_after_prior_row_is_reviewed(
     engine: Engine,
 ) -> None:
     with Session(engine) as session:
-        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        created_at = datetime(2026, 1, 1, tzinfo=UTC)
         item = make_item("cursor-review", created_at=created_at)
         first = make_attachment(item.id, 0)
         session.add(item)
@@ -397,14 +396,15 @@ def test_rejected_media_can_be_reopened_for_review(engine: Engine) -> None:
 def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None:
     with Session(engine) as session:
         recent_item = make_item(
-            "approved-undo-recent", approval_status=ApprovalStatus.APPROVED
+            "approved-undo-recent",
+            approval_status=ApprovalStatus.APPROVED,
         )
         recent = make_attachment(
             recent_item.id,
             0,
             approval_status=ApprovalStatus.APPROVED,
         )
-        recent.decided_at = datetime.now(timezone.utc)
+        recent.decided_at = datetime.now(UTC)
         expired_item = make_item(
             "approved-undo-expired",
             approval_status=ApprovalStatus.APPROVED,
@@ -415,9 +415,7 @@ def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None
             approval_status=ApprovalStatus.APPROVED,
         )
         expired.decided_at = (
-            datetime.now(timezone.utc)
-            - DECISION_UNDO_GRACE_PERIOD
-            - timedelta(seconds=1)
+            datetime.now(UTC) - DECISION_UNDO_GRACE_PERIOD - timedelta(seconds=1)
         )
         session.add(recent_item)
         session.add(expired_item)
@@ -433,7 +431,7 @@ def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None
         expired_now = (
             datetime.now(expired.decided_at.tzinfo)
             if expired.decided_at.tzinfo is not None
-            else datetime.now(timezone.utc).replace(tzinfo=None)
+            else datetime.now(UTC).replace(tzinfo=None)
         )
         assert expired_now - expired.decided_at > DECISION_UNDO_GRACE_PERIOD
         assert reopen_media(recent.id, session).approval_status == "under_review"
@@ -510,7 +508,7 @@ def test_newly_approved_items_wait_for_download_grace_period(
         ready_now = (
             datetime.now(item.download_ready_at.tzinfo)
             if item.download_ready_at.tzinfo is not None
-            else datetime.now(timezone.utc).replace(tzinfo=None)
+            else datetime.now(UTC).replace(tzinfo=None)
         )
         assert item.download_ready_at > ready_now
 
@@ -521,7 +519,7 @@ def test_newly_approved_items_wait_for_download_grace_period(
         assert downloaded == []
         assert item.download_status == DownloadStatus.PENDING
 
-        item.download_ready_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        item.download_ready_at = datetime.now(UTC) - timedelta(seconds=1)
         session.add(item)
         session.commit()
 
@@ -557,13 +555,13 @@ def test_downloads_include_only_kept_media(
         item = make_item("kept-only", approval_status=ApprovalStatus.APPROVED)
         session.add(item)
         session.add(
-            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED)
+            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED),
         )
         session.add(
-            make_attachment(item.id, 1, approval_status=ApprovalStatus.REJECTED)
+            make_attachment(item.id, 1, approval_status=ApprovalStatus.REJECTED),
         )
         session.add(
-            make_attachment(item.id, 2, approval_status=ApprovalStatus.APPROVED)
+            make_attachment(item.id, 2, approval_status=ApprovalStatus.APPROVED),
         )
         session.commit()
 
@@ -595,10 +593,10 @@ def test_partially_reviewed_items_are_not_downloaded(
         item = make_item("partial", approval_status=ApprovalStatus.APPROVED)
         session.add(item)
         session.add(
-            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED)
+            make_attachment(item.id, 0, approval_status=ApprovalStatus.APPROVED),
         )
         session.add(
-            make_attachment(item.id, 1, approval_status=ApprovalStatus.UNDER_REVIEW)
+            make_attachment(item.id, 1, approval_status=ApprovalStatus.UNDER_REVIEW),
         )
         session.commit()
 

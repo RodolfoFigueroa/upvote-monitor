@@ -74,7 +74,7 @@ def _find_rule(
             SourceRule.rule_type == rule_type,
             SourceRule.target_type == body.target_type,
             SourceRule.target_value == body.normalized_target_value(),
-        )
+        ),
     ).first()
 
 
@@ -100,7 +100,7 @@ def add_to_whitelist(
                 target_type=body.target_type,
                 target_value=body.normalized_target_value(),
                 target_label=body.target_label(),
-            )
+            ),
         )
         session.commit()
     _recompute_and_queue_downloads(session, body, background_tasks)
@@ -108,7 +108,8 @@ def add_to_whitelist(
 
 
 @router.delete(
-    "/whitelist/{source}/{target_type}/{target_value}", response_model=RuleListsResponse
+    "/whitelist/{source}/{target_type}/{target_value}",
+    response_model=RuleListsResponse,
 )
 def remove_from_whitelist(
     source: str,
@@ -146,7 +147,7 @@ def add_to_blacklist(
                 target_type=body.target_type,
                 target_value=body.normalized_target_value(),
                 target_label=body.target_label(),
-            )
+            ),
         )
         session.commit()
     _recompute_and_queue_downloads(session, body, background_tasks)
@@ -154,7 +155,8 @@ def add_to_blacklist(
 
 
 @router.delete(
-    "/blacklist/{source}/{target_type}/{target_value}", response_model=RuleListsResponse
+    "/blacklist/{source}/{target_type}/{target_value}",
+    response_model=RuleListsResponse,
 )
 def remove_from_blacklist(
     source: str,

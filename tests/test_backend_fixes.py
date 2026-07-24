@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -71,7 +71,7 @@ def make_item(
         community_label="r/python",
         item_kind="image",
         source_url=f"https://reddit.com/r/python/comments/{item_id}/item/",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         approval_status=approval_status,
         download_status=download_status,
         raw_data_json="{}",
@@ -105,7 +105,7 @@ def test_animated_metadata_preview_falls_back_to_download_url() -> None:
                 "gif": "https://example.com/media/image.gif",
                 "mp4": "https://example.com/media/image.mp4",
             },
-        }
+        },
     )
 
     assert str(best_metadata_preview_url(metadata)) == (
@@ -122,7 +122,7 @@ def test_invalid_refresh_cron_is_rejected_before_persistence(engine: Engine) -> 
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -166,7 +166,7 @@ def test_download_claim_rejects_ineligible_items(
                 item_id,
                 approval_status=approval_status,
                 download_status=download_status,
-            )
+            ),
         )
         session.commit()
 
@@ -216,7 +216,7 @@ def test_refresh_failure_stores_error_type_for_empty_message(
         pass
 
     def fail_ingest(_session: Session) -> None:
-        raise EmptyRefreshError()
+        raise EmptyRefreshError
 
     monkeypatch.setattr("upvote_monitor.services.refresh.ingest_items", fail_ingest)
 
@@ -391,7 +391,7 @@ def test_settings_update_stores_reddit_secret_write_only(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -405,9 +405,9 @@ def test_settings_update_stores_reddit_secret_write_only(
                             "page_limit": 5,
                             "user_agent": "agent/1.0",
                             "session_cookie": "secret-cookie",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             ),
             session,
         )
@@ -430,12 +430,12 @@ def test_settings_update_stores_reddit_secret_write_only(
                 "username": "myusername",
                 "session_cookie": "secret-cookie",
                 "user_agent": "agent/1.0",
-            }
+            },
         ]
 
         response = update_settings(
             SettingsUpdate.model_validate(
-                {"sources": {"reddit": {"enabled": False, "session_cookie": ""}}}
+                {"sources": {"reddit": {"enabled": False, "session_cookie": ""}}},
             ),
             session,
         )
@@ -475,7 +475,7 @@ def test_settings_update_stores_x_secrets_write_only(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -491,9 +491,9 @@ def test_settings_update_stores_x_secrets_write_only(
                             "auth_token": "secret-auth",
                             "ct0": "secret-csrf",
                             "twid": "u%3D123",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             ),
             session,
         )
@@ -515,7 +515,7 @@ def test_settings_update_stores_x_secrets_write_only(
                 "twid": "u%3D123",
                 "bearer_token": None,
                 "user_agent": "agent/1.0",
-            }
+            },
         ]
 
         response = update_settings(
@@ -527,9 +527,9 @@ def test_settings_update_stores_x_secrets_write_only(
                             "auth_token": "",
                             "ct0": "",
                             "twid": "",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             ),
             session,
         )
@@ -569,14 +569,18 @@ def test_settings_update_rejects_enabled_reddit_missing_credentials(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
         with pytest.raises(Exception) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
-                    {"sources": {"reddit": {"enabled": True, "username": "myusername"}}}
+                    {
+                        "sources": {
+                            "reddit": {"enabled": True, "username": "myusername"}
+                        }
+                    },
                 ),
                 session,
             )
@@ -619,7 +623,7 @@ def test_settings_update_rejects_enabled_x_missing_twid(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -632,9 +636,9 @@ def test_settings_update_rejects_enabled_x_missing_twid(
                                 "enabled": True,
                                 "auth_token": "secret-auth",
                                 "ct0": "secret-csrf",
-                            }
-                        }
-                    }
+                            },
+                        },
+                    },
                 ),
                 session,
             )
@@ -677,7 +681,7 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -690,9 +694,9 @@ def test_settings_update_rejects_failed_reddit_probe_without_persisting(
                                 "enabled": True,
                                 "username": "myusername",
                                 "session_cookie": "secret-cookie",
-                            }
-                        }
-                    }
+                            },
+                        },
+                    },
                 ),
                 session,
             )
@@ -732,7 +736,7 @@ def test_settings_update_does_not_probe_unrelated_settings(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
@@ -762,14 +766,14 @@ def test_settings_update_rejects_secret_without_key(
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.commit()
 
         with pytest.raises(Exception) as exc_info:
             update_settings(
                 SettingsUpdate.model_validate(
-                    {"sources": {"reddit": {"session_cookie": "secret-cookie"}}}
+                    {"sources": {"reddit": {"session_cookie": "secret-cookie"}}},
                 ),
                 session,
             )

@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,6 +23,8 @@ from upvote_monitor.enums import (
     ListType,
     RuleTargetType,
 )
+from upvote_monitor.models.child import Children
+from upvote_monitor.models.upvoted import UpvotedResponse
 from upvote_monitor.services.ingest import get_source_providers, ingest_items
 from upvote_monitor.services.secrets import SecretStore
 from upvote_monitor.services.source_settings import (
@@ -30,8 +32,6 @@ from upvote_monitor.services.source_settings import (
     X_SOURCE,
     encode_options,
 )
-from upvote_monitor.models.child import Children
-from upvote_monitor.models.upvoted import UpvotedResponse
 from upvote_monitor.sources.base import MediaAttachmentInput, SourceItem
 from upvote_monitor.sources.reddit import child_to_source_item
 from upvote_monitor.sources.x import (
@@ -64,14 +64,14 @@ def test_reddit_child_is_normalized_to_source_item() -> None:
             subreddit="Python",
             post_hint="image",
             permalink="/r/Python/comments/abc123/a_good_image/",
-            created_utc=datetime.now(timezone.utc),
+            created_utc=datetime.now(UTC),
             media_download_url=["https://i.redd.it/image.jpg"],
             media_preview_url=["https://preview.redd.it/image.jpg"],
             model_dump=lambda **_kwargs: {"id": "abc123"},
-        )
+        ),
     )
 
-    item = child_to_source_item(cast(Children, child))
+    item = child_to_source_item(cast("Children", child))
 
     assert item.source == "reddit"
     assert item.source_item_id == "abc123"
@@ -92,14 +92,14 @@ def test_reddit_rich_video_uses_ytdlp_strategy() -> None:
             subreddit="videos",
             post_hint="rich:video",
             permalink="/r/videos/comments/video123/a_video/",
-            created_utc=datetime.now(timezone.utc),
+            created_utc=datetime.now(UTC),
             media_download_url=["https://example.com/watch?v=video123"],
             media_preview_url=["https://example.com/thumb.jpg"],
             model_dump=lambda **_kwargs: {"id": "video123"},
-        )
+        ),
     )
 
-    item = child_to_source_item(cast(Children, child))
+    item = child_to_source_item(cast("Children", child))
 
     assert item.media[0].media_type == "video"
     assert item.media[0].download_strategy == DownloadStrategy.YT_DLP
@@ -119,7 +119,7 @@ class FakeProvider:
             community_label="Community",
             item_kind="image",
             source_url="https://example.com/one",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             raw_data={"id": "one"},
             media=[
                 MediaAttachmentInput(
@@ -128,7 +128,7 @@ class FakeProvider:
                     download_url="https://example.com/source.jpg",
                     preview_url="https://example.com/preview.jpg",
                     extension=".jpg",
-                )
+                ),
             ],
         )
 
@@ -142,7 +142,7 @@ def test_ingest_stores_generic_items_and_applies_rules(engine: Engine) -> None:
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.add(
             SourceRule(
@@ -151,7 +151,7 @@ def test_ingest_stores_generic_items_and_applies_rules(engine: Engine) -> None:
                 target_type=RuleTargetType.COMMUNITY,
                 target_value="community",
                 target_label="Community",
-            )
+            ),
         )
         session.commit()
 
@@ -185,7 +185,7 @@ class XFakeProvider:
             community_label=None,
             item_kind="x_photo",
             source_url="https://x.com/poster/status/x-one",
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             raw_data={"id": "x-one"},
             media=[
                 MediaAttachmentInput(
@@ -194,7 +194,7 @@ class XFakeProvider:
                     download_url="https://pbs.twimg.com/media/source.jpg",
                     preview_url="https://pbs.twimg.com/media/source.jpg",
                     extension=".jpg",
-                )
+                ),
             ],
         )
 
@@ -208,7 +208,7 @@ def test_ingest_applies_x_author_rules(engine: Engine) -> None:
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.add(
             SourceRule(
@@ -217,7 +217,7 @@ def test_ingest_applies_x_author_rules(engine: Engine) -> None:
                 target_type=RuleTargetType.AUTHOR,
                 target_value="poster",
                 target_label="@poster",
-            )
+            ),
         )
         session.commit()
 
@@ -243,7 +243,7 @@ def test_ingest_applies_reddit_author_rules(engine: Engine) -> None:
                 community_label="r/python",
                 item_kind="image",
                 source_url="https://reddit.com/r/python/comments/reddit-one/item/",
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
                 raw_data={"id": "reddit-one"},
                 media=[
                     MediaAttachmentInput(
@@ -252,7 +252,7 @@ def test_ingest_applies_reddit_author_rules(engine: Engine) -> None:
                         download_url="https://example.com/source.jpg",
                         preview_url="https://example.com/preview.jpg",
                         extension=".jpg",
-                    )
+                    ),
                 ],
             )
 
@@ -264,7 +264,7 @@ def test_ingest_applies_reddit_author_rules(engine: Engine) -> None:
                 refresh_cron="0 */6 * * *",
                 refresh_enabled=True,
                 download_base_dir="/download",
-            )
+            ),
         )
         session.add(
             SourceRule(
@@ -273,7 +273,7 @@ def test_ingest_applies_reddit_author_rules(engine: Engine) -> None:
                 target_type=RuleTargetType.AUTHOR,
                 target_value="author",
                 target_label="@author",
-            )
+            ),
         )
         session.commit()
 
@@ -294,9 +294,9 @@ def test_x_tweet_is_normalized_to_source_item() -> None:
                         "legacy": {
                             "screen_name": "Poster",
                             "name": "Poster Name",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             },
             "legacy": {
                 "id_str": "123",
@@ -333,10 +333,10 @@ def test_x_tweet_is_normalized_to_source_item() -> None:
                                 ],
                             },
                         },
-                    ]
+                    ],
                 },
             },
-        }
+        },
     )
 
     assert item is not None
@@ -366,9 +366,9 @@ def test_x_retweet_media_is_normalized_to_source_item() -> None:
                         "legacy": {
                             "screen_name": "Reposter",
                             "name": "Reposter Name",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             },
             "legacy": {
                 "id_str": "123",
@@ -383,9 +383,9 @@ def test_x_retweet_media_is_normalized_to_source_item() -> None:
                                     "legacy": {
                                         "screen_name": "Artist",
                                         "name": "Artist Name",
-                                    }
-                                }
-                            }
+                                    },
+                                },
+                            },
                         },
                         "legacy": {
                             "id_str": "456",
@@ -402,14 +402,14 @@ def test_x_retweet_media_is_normalized_to_source_item() -> None:
                                             "width": 1024,
                                             "height": 768,
                                         },
-                                    }
-                                ]
+                                    },
+                                ],
                             },
                         },
-                    }
+                    },
                 },
             },
-        }
+        },
     )
 
     assert item is not None
@@ -433,9 +433,9 @@ def test_x_quote_media_is_normalized_to_source_item() -> None:
                         "legacy": {
                             "screen_name": "Poster",
                             "name": "Poster Name",
-                        }
-                    }
-                }
+                        },
+                    },
+                },
             },
             "quoted_status_result": {
                 "result": {
@@ -447,9 +447,9 @@ def test_x_quote_media_is_normalized_to_source_item() -> None:
                                     "legacy": {
                                         "screen_name": "Artist",
                                         "name": "Artist Name",
-                                    }
-                                }
-                            }
+                                    },
+                                },
+                            },
                         },
                         "legacy": {
                             "id_str": "456",
@@ -466,19 +466,19 @@ def test_x_quote_media_is_normalized_to_source_item() -> None:
                                             "width": 1024,
                                             "height": 768,
                                         },
-                                    }
-                                ]
+                                    },
+                                ],
                             },
                         },
-                    }
-                }
+                    },
+                },
             },
             "legacy": {
                 "id_str": "123",
                 "full_text": "Look at this",
                 "created_at": "Mon Sep 24 03:35:21 +0000 2012",
             },
-        }
+        },
     )
 
     assert item is not None
@@ -517,9 +517,9 @@ def test_source_providers_use_reddit_source_settings(
                         "page_limit": 4,
                         "page_size": 100,
                         "user_agent": "agent/1.0",
-                    }
+                    },
                 ),
-            )
+            ),
         )
         session.commit()
 
@@ -528,11 +528,11 @@ def test_source_providers_use_reddit_source_settings(
     assert len(providers) == 1
     provider = providers[0]
     assert provider.source == REDDIT_SOURCE
-    assert getattr(provider, "username") == "myusername"
-    assert getattr(provider, "session_cookie") == "cookie"
-    assert getattr(provider, "user_agent") == "agent/1.0"
-    assert getattr(provider, "page_size") == 100
-    assert getattr(provider, "page_limit") == 4
+    assert provider.username == "myusername"
+    assert provider.session_cookie == "cookie"
+    assert provider.user_agent == "agent/1.0"
+    assert provider.page_size == 100
+    assert provider.page_limit == 4
 
 
 def test_source_providers_use_x_source_settings(
@@ -561,9 +561,9 @@ def test_source_providers_use_x_source_settings(
                         "page_limit": 5,
                         "page_size": 20,
                         "user_agent": "agent/1.0",
-                    }
+                    },
                 ),
-            )
+            ),
         )
         session.commit()
 
@@ -592,7 +592,7 @@ def test_x_provider_resolves_authenticated_user_from_twid() -> None:
         page_limit=5,
     )
 
-    assert provider._authenticated_user_id(cast(Any, object())) == "123"
+    assert provider._authenticated_user_id(cast("Any", object())) == "123"
 
 
 def test_x_credential_validation_uses_likes_endpoint_from_twid(
@@ -631,7 +631,7 @@ def test_source_providers_skip_unconfigured_reddit(engine: Engine) -> None:
                 source=REDDIT_SOURCE,
                 enabled=True,
                 options_json=encode_options({"page_limit": 10}),
-            )
+            ),
         )
         session.commit()
 
@@ -756,7 +756,7 @@ def test_reddit_upvoted_response_accepts_poll_data_object() -> None:
                 "id": "1",
                 "text": "Yes",
                 "vote_count": 10,
-            }
+            },
         ],
         "tournament_id": None,
     }
@@ -771,13 +771,13 @@ def test_reddit_upvoted_response_accepts_poll_data_object() -> None:
                     {
                         "kind": "t3",
                         "data": _reddit_no_media_child_data(poll_data=poll_data),
-                    }
+                    },
                 ],
                 "dist": 1,
                 "geo_filter": "",
                 "modhash": "",
             },
-        }
+        },
     )
 
     child = response.data.children[0]
@@ -838,7 +838,7 @@ def test_reddit_upvoted_generator_stops_at_page_limit(
             user_agent="agent/1.0",
             page_size=100,
             page_limit=3,
-        )
+        ),
     )
 
     assert fake_session.calls == 3

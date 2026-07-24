@@ -54,7 +54,7 @@ class PixAITagger:
 
         if repo_id not in PIXAI_COMPATIBLE_MODEL_REPOS:
             raise ValueError(
-                f"Model repo is not supported by the PixAI tagger: {repo_id}"
+                f"Model repo is not supported by the PixAI tagger: {repo_id}",
             )
 
         model_path = _download_model_file(
@@ -99,7 +99,7 @@ class PixAITagger:
         )
         outputs = self._session.run(None, {self._input.name: image})
         scores = _scores_to_probabilities(
-            _classification_scores(outputs, label_count=len(self._labels))
+            _classification_scores(outputs, label_count=len(self._labels)),
         )
 
         general_tags: dict[str, float] = {}
@@ -263,7 +263,7 @@ def _classification_scores(outputs: Sequence[Any], *, label_count: int) -> np.nd
     sizes = ", ".join(str(output.size) for output in flattened_outputs)
     raise ValueError(
         "PixAI ONNX outputs did not include classification scores "
-        f"for {label_count} labels; output sizes were: {sizes}"
+        f"for {label_count} labels; output sizes were: {sizes}",
     )
 
 

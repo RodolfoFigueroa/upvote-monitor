@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import Column, Text, UniqueConstraint
@@ -8,12 +8,12 @@ from upvote_monitor.enums import (
     AnalysisStatus,
     ApprovalMode,
     ApprovalStatus,
-    DownloadStrategy,
     DownloadStatus,
+    DownloadStrategy,
     IllustrationLabel,
     ListType,
-    RuleTargetType,
     RefreshRunStatus,
+    RuleTargetType,
 )
 
 DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-default"
@@ -22,7 +22,7 @@ DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD = 0.35
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ReviewItem(SQLModel, table=True):
@@ -122,7 +122,8 @@ class MediaAnalysis(SQLModel, table=True):
     illustration_score: float | None = Field(default=None, index=True)
     general_tags_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     character_tags_json: str = Field(
-        default="{}", sa_column=Column(Text, nullable=False)
+        default="{}",
+        sa_column=Column(Text, nullable=False),
     )
     ratings_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     error: str | None = None
@@ -141,10 +142,10 @@ class AppSettings(SQLModel, table=True):
     illustration_auto_approve_enabled: bool = Field(default=False)
     active_analysis_profile_id: str = Field(default=DEFAULT_ANALYSIS_PROFILE_ID)
     general_tag_display_threshold: float = Field(
-        default=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD
+        default=DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
     )
     character_tag_display_threshold: float = Field(
-        default=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD
+        default=DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
     )
 
 

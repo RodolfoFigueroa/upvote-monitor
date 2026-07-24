@@ -1,5 +1,5 @@
-from datetime import datetime
 import json
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 from sqlmodel import Session
@@ -12,22 +12,22 @@ from upvote_monitor.db.models import (
     MediaAttachment,
     ReviewItem,
 )
-from upvote_monitor.services.media_workflow import (
-    approval_status_api,
-    attachment_counts,
-)
 from upvote_monitor.services.download import (
     get_media_attachments,
     get_preview_urls,
     get_source_urls,
+)
+from upvote_monitor.services.media_workflow import (
+    approval_status_api,
+    attachment_counts,
 )
 from upvote_monitor.services.preview_cache import (
     localize_preview_url,
     localize_preview_urls,
 )
 from upvote_monitor.services.tagging.analysis import (
-    get_attachment_analysis,
     get_attachment_analyses,
+    get_attachment_analysis,
     get_item_analysis_summary,
 )
 
@@ -372,7 +372,9 @@ def _filter_scores(
     return {
         name: score
         for name, score in sorted(
-            scores.items(), key=lambda item: item[1], reverse=True
+            scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
         )
         if score >= threshold
     }

@@ -11,12 +11,12 @@ def get_refresh_status(session: Session) -> RefreshStatusResponse:
     running = session.exec(
         select(RefreshRun).where(
             col(RefreshRun.status).in_(
-                [RefreshRunStatus.QUEUED, RefreshRunStatus.RUNNING]
-            )
-        )
+                [RefreshRunStatus.QUEUED, RefreshRunStatus.RUNNING],
+            ),
+        ),
     ).first()
     latest = session.exec(
-        select(RefreshRun).order_by(desc(col(RefreshRun.started_at)))
+        select(RefreshRun).order_by(desc(col(RefreshRun.started_at))),
     ).first()
 
     return RefreshStatusResponse(

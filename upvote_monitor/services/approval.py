@@ -13,7 +13,6 @@ from upvote_monitor.enums import (
 from upvote_monitor.services.media_workflow import set_item_media_approval
 from upvote_monitor.sources.reddit import normalize_reddit_community
 
-
 RuleKey = tuple[str, RuleTargetType, str]
 
 
@@ -124,8 +123,8 @@ def recompute_pending_items_for_rule(
 
     pending_items = session.exec(
         select(ReviewItem).where(
-            ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW
-        )
+            ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
+        ),
     ).all()
     matching_items = []
     for item in pending_items:
@@ -135,7 +134,9 @@ def recompute_pending_items_for_rule(
             if item.community_name is None:
                 continue
             item_target = normalize_rule_target(
-                source, target_type, item.community_name
+                source,
+                target_type,
+                item.community_name,
             )
             if item_target != normalized:
                 continue

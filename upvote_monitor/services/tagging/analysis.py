@@ -2,7 +2,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -16,17 +16,17 @@ from upvote_monitor.db.models import (
     ReviewItem,
 )
 from upvote_monitor.enums import AnalysisStatus, ApprovalStatus
+from upvote_monitor.services.media_workflow import set_media_decision
 from upvote_monitor.services.preview_cache import (
     get_or_fetch_cached_preview,
     is_cacheable_preview_url,
 )
-from upvote_monitor.services.media_workflow import set_media_decision
-from upvote_monitor.services.tagging.scoring import score_illustration
-from upvote_monitor.services.tagging.profiles import active_analysis_profile
 from upvote_monitor.services.tagging.pixai_tagger import (
     PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
     get_pixai_tagger,
 )
+from upvote_monitor.services.tagging.profiles import active_analysis_profile
+from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult, get_wd_tagger
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,8 @@ def process_pending_analysis(
     result = AnalysisBatchResult()
     items = session.exec(
         select(ReviewItem).where(
-            ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW
-        )
+            ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
+        ),
     ).all()
 
     for item in items:
@@ -177,7 +177,7 @@ def get_attachment_analysis(
         select(MediaAnalysis)
         .where(MediaAnalysis.attachment_id == attachment_id)
         .where(MediaAnalysis.analysis_profile_id == profile.id)
-        .order_by(col(MediaAnalysis.analyzed_at).desc())
+        .order_by(col(MediaAnalysis.analyzed_at).desc()),
     ).first()
 
 
@@ -191,8 +191,8 @@ def get_attachment_analyses(
         session.exec(
             select(MediaAnalysis)
             .where(MediaAnalysis.attachment_id == attachment_id)
-            .order_by(col(MediaAnalysis.analyzed_at).desc())
-        ).all()
+            .order_by(col(MediaAnalysis.analyzed_at).desc()),
+        ).all(),
     )
 
 
@@ -211,7 +211,7 @@ def get_item_analysis_summary(
             col(MediaAttachment.id) == col(MediaAnalysis.attachment_id),
         )
         .where(MediaAttachment.item_id == item_id)
-        .where(MediaAnalysis.analysis_profile_id == profile.id)
+        .where(MediaAnalysis.analysis_profile_id == profile.id),
     ).all()
     if not rows:
         return ItemAnalysisSummary(status=None, illustration_score=None)
@@ -250,8 +250,8 @@ def _image_attachments_for_item(
             select(MediaAttachment)
             .where(MediaAttachment.item_id == item_id)
             .where(MediaAttachment.media_type == "image")
-            .order_by(col(MediaAttachment.sort_index))
-        ).all()
+            .order_by(col(MediaAttachment.sort_index)),
+        ).all(),
     )
 
 
@@ -318,7 +318,7 @@ def _existing_analysis(
     return session.exec(
         select(MediaAnalysis)
         .where(MediaAnalysis.attachment_id == attachment_id)
-        .where(MediaAnalysis.analysis_profile_id == profile.id)
+        .where(MediaAnalysis.analysis_profile_id == profile.id),
     ).first()
 
 
@@ -403,7 +403,7 @@ def _analysis_result(
         character_tags_json=character_tags_json,
         ratings_json=ratings_json,
         error=error,
-        analyzed_at=datetime.now(timezone.utc),
+        analyzed_at=datetime.now(UTC),
     )
 
 
@@ -429,7 +429,9 @@ def _filter_scores(
     return {
         name: round(float(score), 4)
         for name, score in sorted(
-            scores.items(), key=lambda item: item[1], reverse=True
+            scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
         )
         if score >= threshold
     }

@@ -26,4 +26,11 @@ dev = [
     "ipykernel<7",
     "pytest>=9.1.0",
     "pytest-cov>=7.1.0",
+    "ruff>=0.16.0",
+    "ty>=0.0.63",
 ]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D", "CPY001", "PLR2004", "COM812"]
+per-file-ignores = { "tests/*/**.py" = ["S101"] }

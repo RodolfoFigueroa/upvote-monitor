@@ -40,7 +40,8 @@ class OtherMediaRedGIFs(_BaseOtherMedia):
 
 
 OtherMedia = Annotated[
-    OtherMediaYoutube | OtherMediaRedGIFs, Field(discriminator="type")
+    OtherMediaYoutube | OtherMediaRedGIFs,
+    Field(discriminator="type"),
 ]
 
 

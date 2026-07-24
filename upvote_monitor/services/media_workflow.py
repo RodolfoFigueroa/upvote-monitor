@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, col, select
 
@@ -18,7 +18,7 @@ def _elapsed_since(value: datetime) -> timedelta:
     now = (
         datetime.now(value.tzinfo)
         if value.tzinfo is not None
-        else datetime.now(timezone.utc).replace(tzinfo=None)
+        else datetime.now(UTC).replace(tzinfo=None)
     )
     return now - value
 
@@ -41,7 +41,7 @@ def approval_status_api(status: ApprovalStatus) -> str:
 
 def attachment_counts(session: Session, item_id: str) -> MediaDecisionCounts:
     attachments = session.exec(
-        select(MediaAttachment).where(MediaAttachment.item_id == item_id)
+        select(MediaAttachment).where(MediaAttachment.item_id == item_id),
     ).all()
     return MediaDecisionCounts(
         approved=sum(
@@ -106,7 +106,7 @@ def set_item_media_approval(
 ) -> ReviewItem:
     decided_at = utc_now() if status != ApprovalStatus.UNDER_REVIEW else None
     attachments = session.exec(
-        select(MediaAttachment).where(MediaAttachment.item_id == item.id)
+        select(MediaAttachment).where(MediaAttachment.item_id == item.id),
     ).all()
     for attachment in attachments:
         attachment.approval_status = status
@@ -184,7 +184,7 @@ def reopen_rejected_media_for_item(
     attachments = session.exec(
         select(MediaAttachment)
         .where(MediaAttachment.item_id == item.id)
-        .where(MediaAttachment.approval_status == ApprovalStatus.REJECTED)
+        .where(MediaAttachment.approval_status == ApprovalStatus.REJECTED),
     ).all()
     if not attachments:
         return item
@@ -209,7 +209,7 @@ def item_has_under_review_media(session: Session, item_id: str) -> bool:
             select(MediaAttachment.id)
             .where(MediaAttachment.item_id == item_id)
             .where(MediaAttachment.approval_status == ApprovalStatus.UNDER_REVIEW)
-            .limit(1)
+            .limit(1),
         ).first()
         is not None
     )
@@ -224,6 +224,6 @@ def approved_media_attachments(
             select(MediaAttachment)
             .where(MediaAttachment.item_id == item_id)
             .where(MediaAttachment.approval_status == ApprovalStatus.APPROVED)
-            .order_by(col(MediaAttachment.sort_index))
-        ).all()
+            .order_by(col(MediaAttachment.sort_index)),
+        ).all(),
     )

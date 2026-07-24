@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,7 +8,6 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-import upvote_monitor.services.preview_cache as preview_cache
 from upvote_monitor.api.items import approve_item, get_item_preview, reject_item
 from upvote_monitor.db.models import (
     AppSettings,
@@ -24,6 +23,7 @@ from upvote_monitor.enums import (
     RuleTargetType,
 )
 from upvote_monitor.schemas.items import ItemSummary
+from upvote_monitor.services import preview_cache
 from upvote_monitor.services.approval import recompute_pending_items_for_rule
 
 
@@ -66,7 +66,7 @@ def make_item(
         community_label=f"r/{community}",
         item_kind="image",
         source_url=f"https://reddit.com/r/{community}/comments/{item_id}/item/",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         approval_status=approval_status,
         download_status=download_status,
         raw_data_json="{}",
@@ -121,7 +121,7 @@ def _add_settings(session: Session) -> None:
             refresh_cron="0 */6 * * *",
             refresh_enabled=True,
             download_base_dir="/download",
-        )
+        ),
     )
 
 
@@ -280,7 +280,8 @@ def test_approve_and_reject_delete_preview_cache(
     monkeypatch.setattr("upvote_monitor.schemas.items.get_preview_urls", lambda *_: [])
     monkeypatch.setattr("upvote_monitor.schemas.items.get_source_urls", lambda *_: [])
     monkeypatch.setattr(
-        "upvote_monitor.schemas.items.get_media_attachments", lambda *_: []
+        "upvote_monitor.schemas.items.get_media_attachments",
+        lambda *_: [],
     )
 
     with Session(engine) as session:
@@ -309,7 +310,7 @@ def test_recompute_deletes_preview_cache_for_items_moved_out_of_review(
                 target_type=RuleTargetType.COMMUNITY,
                 target_value="python",
                 target_label="r/python",
-            )
+            ),
         )
         session.add(make_item("blacklisted-cache"))
         _write_cached_preview("blacklisted-cache")
@@ -337,7 +338,7 @@ def test_cleanup_stale_preview_cache_preserves_only_under_review_items(
                 "remove-cache",
                 approval_status=ApprovalStatus.APPROVED,
                 download_status=DownloadStatus.COMPLETED,
-            )
+            ),
         )
         session.commit()
 

@@ -20,16 +20,16 @@ from upvote_monitor.schemas.items import (
 )
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import get_preview_urls, run_download_background
+from upvote_monitor.services.media_workflow import (
+    ReopenMediaConflictError,
+    reopen_rejected_media_for_item,
+    set_item_media_approval,
+)
 from upvote_monitor.services.preview_cache import (
     PreviewCacheFetchError,
     PreviewCacheNotFound,
     get_or_fetch_cached_preview,
     preview_media_type,
-)
-from upvote_monitor.services.media_workflow import (
-    ReopenMediaConflictError,
-    reopen_rejected_media_for_item,
-    set_item_media_approval,
 )
 from upvote_monitor.services.refresh_status import broadcast_review_queue_changed
 from upvote_monitor.services.tagging.analysis import (
@@ -90,7 +90,8 @@ def list_items(
             dl_status = DownloadStatus(download_status)
         except ValueError as exc:
             raise HTTPException(
-                status_code=422, detail="Invalid download_status"
+                status_code=422,
+                detail="Invalid download_status",
             ) from exc
         query = query.where(ReviewItem.download_status == dl_status)
         count_query = count_query.where(ReviewItem.download_status == dl_status)

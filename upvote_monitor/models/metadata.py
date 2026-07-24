@@ -35,12 +35,14 @@ class AnimatedImageMediaMetadata(_BaseMediaMetadata):
 
 
 MediaMetadata = Annotated[
-    ImageMediaMetadata | AnimatedImageMediaMetadata, Field(discriminator="e")
+    ImageMediaMetadata | AnimatedImageMediaMetadata,
+    Field(discriminator="e"),
 ]
 
 
 def best_metadata_preview_url(
-    metadata: MediaMetadata, max_width: int = 640
+    metadata: MediaMetadata,
+    max_width: int = 640,
 ) -> UnescapedUrl:
     if metadata.p:
         return best_image_list_url(metadata.p, max_width=max_width)

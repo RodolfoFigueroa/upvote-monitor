@@ -29,7 +29,6 @@ from urllib.parse import unquote
 
 import requests
 
-
 DOMAIN = "x.com"
 BEARER_TOKEN = (
     "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
@@ -92,7 +91,7 @@ USER_FEATURES = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Fetch a small sample of X/Twitter liked tweets via direct web GraphQL."
+        description="Fetch a small sample of X/Twitter liked tweets via direct web GraphQL.",
     )
     parser.add_argument(
         "--cookies-file",
@@ -241,7 +240,7 @@ def build_session(cookies: dict[str, str], user_agent: str) -> requests.Session:
             "accept-language": "en-US,en;q=0.9",
             "x-twitter-client-language": "en-US",
             "x-csrf-token": cookies["ct0"],
-        }
+        },
     )
     return session
 
@@ -256,7 +255,7 @@ def get_json(
         data = response.json()
     except requests.JSONDecodeError as exc:
         raise RuntimeError(
-            f"X returned non-JSON response with status {response.status_code}"
+            f"X returned non-JSON response with status {response.status_code}",
         ) from exc
 
     if response.status_code >= 400:
@@ -276,7 +275,7 @@ def user_by_screen_name(session: requests.Session, screen_name: str) -> tuple[st
             },
             "features": USER_FEATURES,
             "fieldToggles": {"withAuxiliaryUserLabels": False},
-        }
+        },
     )
     data = get_json(session, USER_BY_SCREEN_NAME_URL, params=params)
     user_data = data.get("data", {}).get("user", {}).get("result")
@@ -548,7 +547,9 @@ def main() -> int:
         payload = fetch_likes(args)
     except Exception as exc:  # noqa: BLE001 - this probe should show auth/API breakage plainly.
         print(
-            json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2)
+            json.dumps(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, indent=2
+            ),
         )
         return 2
 

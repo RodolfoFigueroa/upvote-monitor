@@ -12,8 +12,7 @@ REDDIT_BASE_URL = "https://reddit.com"
 
 def normalize_reddit_community(name: str) -> str:
     name = name.strip().lower()
-    if name.startswith("r/"):
-        name = name[2:]
+    name = name.removeprefix("r/")
     return name
 
 
@@ -67,7 +66,7 @@ def child_to_source_item(child: Children) -> SourceItem:
                 preview_url=preview_url,
                 extension=_extension_from_url(download_url),
                 download_strategy=_download_strategy_for_child(child),
-            )
+            ),
         )
 
     community_name = normalize_reddit_community(child.data.subreddit)

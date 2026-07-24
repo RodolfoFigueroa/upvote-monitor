@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 
 from sqlmodel import Session, col, select
@@ -33,9 +33,9 @@ def _has_active_refresh(session: Session) -> bool:
     active = session.exec(
         select(RefreshRun).where(
             col(RefreshRun.status).in_(
-                [RefreshRunStatus.QUEUED, RefreshRunStatus.RUNNING]
-            )
-        )
+                [RefreshRunStatus.QUEUED, RefreshRunStatus.RUNNING],
+            ),
+        ),
     ).first()
     return active is not None
 
@@ -43,11 +43,11 @@ def _has_active_refresh(session: Session) -> bool:
 def create_refresh_run(session: Session) -> RefreshRun:
     with _refresh_create_lock:
         if _has_active_refresh(session):
-            raise RefreshAlreadyRunningError()
+            raise RefreshAlreadyRunningError
 
         run = RefreshRun(
             status=RefreshRunStatus.QUEUED,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         session.add(run)
         session.commit()
@@ -63,7 +63,7 @@ def execute_refresh_run(session: Session, run_id: str) -> None:
         return
 
     run.status = RefreshRunStatus.RUNNING
-    run.started_at = datetime.now(timezone.utc)
+    run.started_at = datetime.now(UTC)
     session.add(run)
     session.commit()
     broadcast_refresh_status(session)
@@ -85,7 +85,7 @@ def execute_refresh_run(session: Session, run_id: str) -> None:
         run.status = RefreshRunStatus.FAILED
         run.error = _format_refresh_error(exc)
     finally:
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         session.add(run)
         session.commit()
         broadcast_refresh_status(session)

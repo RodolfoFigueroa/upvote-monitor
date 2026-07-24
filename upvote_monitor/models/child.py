@@ -201,7 +201,7 @@ class _BaseVideoChildData(_BaseChildData):
     def _download_to_path(self, url: UnescapedUrl, path: os.PathLike | str) -> None:
         path = Path(path)
         with YoutubeDL(
-            params={"outtmpl": str(path.parent / f"{path.stem}.%(ext)s")}
+            params={"outtmpl": str(path.parent / f"{path.stem}.%(ext)s")},
         ) as ydl:
             ydl.download(str(url))
 
@@ -258,7 +258,8 @@ class GalleryChildData(_BaseImageChildData):
         return [
             metadata.download_url
             for metadata in _ordered_gallery_metadata(
-                self.gallery_data, self.media_metadata
+                self.gallery_data,
+                self.media_metadata,
             )
         ]
 
@@ -268,7 +269,8 @@ class GalleryChildData(_BaseImageChildData):
         return [
             best_metadata_preview_url(metadata)
             for metadata in _ordered_gallery_metadata(
-                self.gallery_data, self.media_metadata
+                self.gallery_data,
+                self.media_metadata,
             )
         ]
 

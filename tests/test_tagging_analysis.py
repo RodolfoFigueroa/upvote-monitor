@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +10,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+import upvote_monitor.services.tagging.pixai_tagger as pixai_tagger_module
 from upvote_monitor.api.items import analyze_item_endpoint
 from upvote_monitor.db.models import (
+    DEFAULT_ANALYSIS_PROFILE_ID,
     AnalysisProfile,
     AppSettings,
-    DEFAULT_ANALYSIS_PROFILE_ID,
     MediaAnalysis,
     MediaAttachment,
     ReviewItem,
@@ -26,24 +27,23 @@ from upvote_monitor.enums import (
     DownloadStatus,
 )
 from upvote_monitor.schemas.items import ItemDetail
-from upvote_monitor.services.ingest import IngestResult
 from upvote_monitor.services.download import DownloadBatchResult
+from upvote_monitor.services.ingest import IngestResult
 from upvote_monitor.services.refresh import create_refresh_run, execute_refresh_run
 from upvote_monitor.services.tagging.analysis import (
     TaggerUnavailableError,
     analyze_item,
     process_pending_analysis,
 )
-from upvote_monitor.services.tagging.profiles import (
-    BUILT_IN_ANALYSIS_PROFILES,
-    SCORING_VERSION,
-    ensure_default_analysis_profiles,
-)
-import upvote_monitor.services.tagging.pixai_tagger as pixai_tagger_module
 from upvote_monitor.services.tagging.pixai_tagger import (
     PIXAI_TAGGER_V0_9_ONNX_REPO_ID,
     PixAITagger,
     _scores_to_probabilities,
+)
+from upvote_monitor.services.tagging.profiles import (
+    BUILT_IN_ANALYSIS_PROFILES,
+    SCORING_VERSION,
+    ensure_default_analysis_profiles,
 )
 from upvote_monitor.services.tagging.scoring import score_illustration
 from upvote_monitor.services.tagging.wd_tagger import (
@@ -108,7 +108,7 @@ def make_item(
         community_label="r/art",
         item_kind="image",
         source_url=f"https://reddit.com/r/art/comments/{item_id}/item/",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         approval_status=approval_status,
         download_status=DownloadStatus.PENDING,
         raw_data_json="{}",
@@ -157,7 +157,7 @@ def add_settings(
             general_tag_display_threshold=general_display_threshold,
             character_tag_display_threshold=character_display_threshold,
             auto_approve_threshold=threshold,
-        )
+        ),
     )
     session.add(
         AppSettings(
@@ -171,7 +171,7 @@ def add_settings(
             active_analysis_profile_id=profile_id,
             general_tag_display_threshold=app_general_display_threshold,
             character_tag_display_threshold=app_character_display_threshold,
-        )
+        ),
     )
 
 
@@ -255,7 +255,7 @@ def test_default_analysis_profiles_disable_deprecated_v2_profile(
                 character_tag_display_threshold=0.35,
                 auto_approve_threshold=0.90,
                 enabled=True,
-            )
+            ),
         )
         session.add(
             AppSettings(
@@ -265,7 +265,7 @@ def test_default_analysis_profiles_disable_deprecated_v2_profile(
                 refresh_enabled=True,
                 download_base_dir="/download",
                 active_analysis_profile_id="wd-v1-4-vit-v2",
-            )
+            ),
         )
         session.commit()
 
@@ -306,7 +306,7 @@ def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
                 "manga,0",
                 "hatsune_miku,4",
                 "ignored_copyright,3",
-            ]
+            ],
         ),
         encoding="utf-8",
     )
@@ -454,7 +454,7 @@ def test_pending_analysis_uses_selected_eva02_profile(
                 illustration_tagger_enabled=True,
                 illustration_auto_approve_enabled=False,
                 active_analysis_profile_id="wd-eva02-large-v3",
-            )
+            ),
         )
         item = make_item("eva-profile")
         session.add(item)
@@ -504,7 +504,7 @@ def test_pending_analysis_uses_selected_pixai_profile(
                 illustration_tagger_enabled=True,
                 illustration_auto_approve_enabled=False,
                 active_analysis_profile_id="pixai-v0-9-onnx",
-            )
+            ),
         )
         item = make_item("pixai-profile")
         session.add(item)
@@ -565,7 +565,7 @@ def test_pending_analysis_stores_near_raw_tags_but_filters_api_display(
                         "mid_character": 0.6,
                         "low_character": 0.2,
                     },
-                )
+                ),
             ),
         )
 
@@ -608,7 +608,7 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 general_tag_display_threshold=0.2,
                 character_tag_display_threshold=0.35,
                 auto_approve_threshold=0.8,
-            )
+            ),
         )
         assert attachment.id is not None
         session.add(
@@ -623,7 +623,7 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 general_tags_json='{"manga": 0.91}',
                 character_tags_json='{"hatsune_miku": 0.92}',
                 ratings_json="{}",
-            )
+            ),
         )
         session.add(
             MediaAnalysis(
@@ -637,7 +637,7 @@ def test_item_detail_uses_active_profile_and_preserves_other_analyses(
                 general_tags_json='{"realistic": 0.8}',
                 character_tags_json="{}",
                 ratings_json="{}",
-            )
+            ),
         )
         session.commit()
 
@@ -665,7 +665,7 @@ def test_pending_analysis_skips_non_cacheable_preview(engine: Engine) -> None:
         item = make_item("video-preview")
         session.add(item)
         session.add(
-            make_attachment(item.id, preview_url="https://example.com/clip.mp4")
+            make_attachment(item.id, preview_url="https://example.com/clip.mp4"),
         )
         session.commit()
 
@@ -696,7 +696,7 @@ def test_manual_analyze_endpoint_force_retags_without_auto_approval(
             ratings={"safe": 0.7},
             general_tags={"realistic": 0.9, "photo_background": 0.8},
             character_tags={"real_person": 0.9},
-        )
+        ),
     )
     second_tagger = FakeTagger()
     taggers = [first_tagger, second_tagger]
@@ -744,7 +744,7 @@ def test_manual_analysis_rejects_unsupported_active_profile(engine: Engine) -> N
                 general_tag_display_threshold=0.15,
                 character_tag_display_threshold=0.35,
                 auto_approve_threshold=0.9,
-            )
+            ),
         )
         session.add(
             AppSettings(
@@ -756,7 +756,7 @@ def test_manual_analysis_rejects_unsupported_active_profile(engine: Engine) -> N
                 illustration_tagger_enabled=True,
                 illustration_auto_approve_enabled=False,
                 active_analysis_profile_id=profile_id,
-            )
+            ),
         )
         item = make_item("unsupported-profile-item")
         session.add(item)

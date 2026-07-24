@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -127,11 +127,11 @@ def _parse_created_at(value: str | None) -> datetime:
         try:
             parsed = parsedate_to_datetime(value)
             if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.replace(tzinfo=UTC)
             return parsed
         except (TypeError, ValueError):
             pass
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _request_json(
@@ -144,7 +144,7 @@ def _request_json(
         data = response.json()
     except ValueError as exc:
         raise XSourceError(
-            f"X returned non-JSON response with status {response.status_code}"
+            f"X returned non-JSON response with status {response.status_code}",
         ) from exc
 
     if response.status_code >= 400:
@@ -181,7 +181,7 @@ def _build_session(
             "accept-language": "en-US,en;q=0.9",
             "x-twitter-client-language": "en-US",
             "x-csrf-token": ct0,
-        }
+        },
     )
     return session
 
@@ -199,7 +199,7 @@ def _user_by_screen_name(
             },
             "features": USER_FEATURES,
             "fieldToggles": {"withAuxiliaryUserLabels": False},
-        }
+        },
     )
     data = _request_json(session, USER_BY_SCREEN_NAME_URL, params=params)
     user_data = data.get("data", {}).get("user", {}).get("result")

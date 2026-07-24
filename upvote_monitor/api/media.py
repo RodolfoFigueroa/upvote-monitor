@@ -1,6 +1,6 @@
 import base64
-from datetime import datetime
 import json
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -125,7 +125,7 @@ def _get_media_or_404(
     row = session.exec(
         select(MediaAttachment, ReviewItem)
         .join(ReviewItem, col(ReviewItem.id) == col(MediaAttachment.item_id))
-        .where(MediaAttachment.id == media_id)
+        .where(MediaAttachment.id == media_id),
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Media not found")

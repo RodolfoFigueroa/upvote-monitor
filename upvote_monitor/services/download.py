@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import or_, update
@@ -31,8 +31,8 @@ def get_media_attachments(session: Session, item_id: str) -> list[MediaAttachmen
         session.exec(
             select(MediaAttachment)
             .where(MediaAttachment.item_id == item_id)
-            .order_by(col(MediaAttachment.sort_index))
-        ).all()
+            .order_by(col(MediaAttachment.sort_index)),
+        ).all(),
     )
 
 
@@ -74,7 +74,7 @@ def _seconds_until_download_ready(item: ReviewItem) -> float:
     now = (
         datetime.now(item.download_ready_at.tzinfo)
         if item.download_ready_at.tzinfo is not None
-        else datetime.now(timezone.utc).replace(tzinfo=None)
+        else datetime.now(UTC).replace(tzinfo=None)
     )
     return max((item.download_ready_at - now).total_seconds(), 0)
 
@@ -94,13 +94,13 @@ def claim_item_for_download(
         .where(col(ReviewItem.approval_status) == ApprovalStatus.APPROVED)
         .where(
             col(ReviewItem.download_status).in_(
-                [DownloadStatus.PENDING, DownloadStatus.FAILED]
-            )
+                [DownloadStatus.PENDING, DownloadStatus.FAILED],
+            ),
         )
     )
     if not ignore_ready_at:
         statement = statement.where(
-            _download_ready_filter(datetime.now(timezone.utc).replace(tzinfo=None))
+            _download_ready_filter(datetime.now(UTC).replace(tzinfo=None)),
         )
 
     result: Any = session.exec(
@@ -108,7 +108,7 @@ def claim_item_for_download(
             download_status=DownloadStatus.IN_PROGRESS,
             download_ready_at=None,
             download_error=None,
-        ).execution_options(synchronize_session=False)
+        ).execution_options(synchronize_session=False),
     )
     session.commit()
 
@@ -143,7 +143,9 @@ def run_download_background(item_id: str, *, ignore_ready_at: bool = False) -> N
         if settings is None:
             return
         item = claim_item_for_download(
-            session, item_id, ignore_ready_at=ignore_ready_at
+            session,
+            item_id,
+            ignore_ready_at=ignore_ready_at,
         )
         if item is None:
             return
@@ -169,7 +171,7 @@ def _download_claimed_item(
             _download_attachment_to_path(attachment, target_path)
 
         item.download_status = DownloadStatus.COMPLETED
-        item.downloaded_at = datetime.now(timezone.utc)
+        item.downloaded_at = datetime.now(UTC)
         item.download_dir = str(target_dir.resolve())
         item.download_error = None
     except Exception as exc:
@@ -196,7 +198,7 @@ def _download_attachment_to_path(
 
     if attachment.download_strategy == DownloadStrategy.YT_DLP:
         with YoutubeDL(
-            params={"outtmpl": str(path.parent / f"{path.stem}.%(ext)s")}
+            params={"outtmpl": str(path.parent / f"{path.stem}.%(ext)s")},
         ) as ydl:
             ydl.download([attachment.download_url])
         return
@@ -218,9 +220,9 @@ def process_pending_downloads(
         select(ReviewItem.id).where(
             col(ReviewItem.approval_status) == ApprovalStatus.APPROVED,
             col(ReviewItem.download_status).in_(
-                [DownloadStatus.PENDING, DownloadStatus.FAILED]
+                [DownloadStatus.PENDING, DownloadStatus.FAILED],
             ),
-        )
+        ),
     ).all()
 
     triggered = 0

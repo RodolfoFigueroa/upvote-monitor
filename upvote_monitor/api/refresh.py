@@ -56,7 +56,7 @@ def list_refresh_runs(
         select(RefreshRun)
         .order_by(desc(col(RefreshRun.started_at)))
         .offset(offset)
-        .limit(limit)
+        .limit(limit),
     ).all()
     return [RefreshRunResponse.from_db(run) for run in runs]
 

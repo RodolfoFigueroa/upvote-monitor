@@ -46,8 +46,8 @@ def _ensure_app_settings_schema() -> None:
                 text(
                     "ALTER TABLE app_settings "
                     "ADD COLUMN general_tag_display_threshold FLOAT NOT NULL "
-                    f"DEFAULT {DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD}"
-                )
+                    f"DEFAULT {DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD}",
+                ),
             )
             added_display_threshold = True
         if "character_tag_display_threshold" not in columns:
@@ -55,8 +55,8 @@ def _ensure_app_settings_schema() -> None:
                 text(
                     "ALTER TABLE app_settings "
                     "ADD COLUMN character_tag_display_threshold FLOAT NOT NULL "
-                    f"DEFAULT {DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD}"
-                )
+                    f"DEFAULT {DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD}",
+                ),
             )
             added_display_threshold = True
         if added_display_threshold and "tag_display_threshold" in columns:
@@ -64,8 +64,8 @@ def _ensure_app_settings_schema() -> None:
                 text(
                     "UPDATE app_settings "
                     "SET general_tag_display_threshold = tag_display_threshold, "
-                    "character_tag_display_threshold = tag_display_threshold"
-                )
+                    "character_tag_display_threshold = tag_display_threshold",
+                ),
             )
 
 

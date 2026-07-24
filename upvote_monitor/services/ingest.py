@@ -60,7 +60,7 @@ def get_source_providers(session: Session) -> list[SourceProvider]:
                     user_agent=reddit_options.user_agent,
                     page_size=reddit_options.page_size,
                     page_limit=reddit_options.page_limit,
-                )
+                ),
             )
         else:
             missing_fields = [
@@ -99,7 +99,7 @@ def get_source_providers(session: Session) -> list[SourceProvider]:
                     user_agent=x_options.user_agent,
                     page_size=x_options.page_size,
                     page_limit=x_options.page_limit,
-                )
+                ),
             )
         else:
             missing_fields = [

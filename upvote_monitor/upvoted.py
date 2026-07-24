@@ -1,4 +1,4 @@
-from typing import Generator
+from collections.abc import Generator
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -30,7 +30,7 @@ def _build_session(user_agent: str, session_cookie: str) -> requests.Session:
         {
             "User-Agent": user_agent,
             "Cookie": f"reddit_session={session_cookie}",
-        }
+        },
     )
     return session
 
@@ -42,7 +42,7 @@ def upvoted_posts_generator(
     user_agent: str,
     page_size: int,
     page_limit: int,
-) -> Generator[Children, None, None]:
+) -> Generator[Children]:
     session = _build_session(user_agent, session_cookie)
     url = f"https://www.reddit.com/user/{username}/upvoted.json"
 

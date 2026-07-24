@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -85,7 +85,7 @@ def queue_refresh_run() -> str | None:
     scheduler = get_scheduler()
     scheduler.add_job(
         _execute_refresh_run,
-        DateTrigger(run_date=datetime.now(timezone.utc)),
+        DateTrigger(run_date=datetime.now(UTC)),
         args=[run.id],
         id=f"refresh_{run.id}",
     )

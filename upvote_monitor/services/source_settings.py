@@ -59,7 +59,7 @@ def _ensure_source_settings(
                 source=source,
                 enabled=enabled,
                 options_json=json.dumps(options),
-            )
+            ),
         )
 
 

@@ -27,7 +27,7 @@ CACHE_EXTENSIONS = tuple(IMAGE_CONTENT_TYPES.values())
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"})
 VIDEO_EXTENSIONS = frozenset({".mp4", ".webm", ".mov", ".m4v"})
 REDDIT_IMAGE_HOSTS = frozenset(
-    {"i.redd.it", "preview.redd.it", "external-preview.redd.it"}
+    {"i.redd.it", "preview.redd.it", "external-preview.redd.it"},
 )
 
 _locks_guard = Lock()
@@ -101,9 +101,9 @@ def cleanup_stale_preview_cache(session: Session) -> None:
     active_ids = set(
         session.exec(
             select(ReviewItem.id).where(
-                ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW
-            )
-        ).all()
+                ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
+            ),
+        ).all(),
     )
 
     for path in PREVIEW_CACHE_DIR.iterdir():
@@ -174,7 +174,7 @@ def _fetch_preview(item_id: str, index: int, remote_url: str) -> Path:
     try:
         response.raise_for_status()
         content_type = _normalized_content_type(
-            response.headers.get("Content-Type", "")
+            response.headers.get("Content-Type", ""),
         )
         extension = IMAGE_CONTENT_TYPES.get(content_type)
         if extension is None:

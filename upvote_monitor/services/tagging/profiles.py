@@ -136,7 +136,7 @@ def ensure_default_analysis_profiles(session: Session) -> None:
                     ),
                     auto_approve_threshold=profile.auto_approve_threshold,
                     enabled=profile.enabled,
-                )
+                ),
             )
             changed = True
         elif _sync_profile(row, profile):
@@ -166,7 +166,7 @@ def ensure_default_analysis_profiles(session: Session) -> None:
 
 def list_analysis_profiles(session: Session) -> list[AnalysisProfile]:
     return list(
-        session.exec(select(AnalysisProfile).order_by(AnalysisProfile.name)).all()
+        session.exec(select(AnalysisProfile).order_by(AnalysisProfile.name)).all(),
     )
 
 
