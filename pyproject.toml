@@ -33,4 +33,4 @@ dev = [
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = ["D", "CPY001", "PLR2004", "COM812"]
-per-file-ignores = { "tests/*/**.py" = ["S101"] }
+per-file-ignores = { "tests/**/*.py" = ["S101"] }
