@@ -1,0 +1,255 @@
+id: pre-feature-hardening
+objective: Harden Upvote Monitor's state integrity, persistence, performance, model reproducibility, and external I/O before feature development continues.
+
+invariants:
+  - Only approved items with completed downloads expose archived files through the API.
+  - Approval decisions remain editable before download completion, including the existing undo grace period.
+  - Illustration labels remain editable independently of approval and download state.
+  - Source credentials remain encrypted at rest and are never returned by the API.
+  - The supported deployment remains one local application process with SQLite-backed durable state.
+
+non_goals:
+  - Add API authentication or support a remotely exposed deployment.
+  - Preserve or migrate unversioned alpha SQLite databases created before the new migration baseline.
+  - Preserve approval-changing API behavior after an item reaches completed download state.
+  - Preserve the unused offset and total-count contract on the cursor-paginated /api/media endpoint.
+  - Treat analyses identified only by a mutable Hugging Face main revision as reproducible or comparable with newly generated analyses.
+  - Support multiple application workers or a distributed background-job system.
+
+regression_suite:
+  - run: uv run ruff format --check .
+    cwd: .
+    timeout_seconds: 300
+  - run: uv run ruff check .
+    cwd: .
+    timeout_seconds: 300
+  - run: uv run ty check
+    cwd: .
+    timeout_seconds: 300
+  - run: uv run pytest --cov=upvote_monitor --cov-report=xml
+    cwd: .
+    timeout_seconds: 1800
+  - run: npm run check
+    cwd: frontend
+    timeout_seconds: 600
+  - run: npm run build
+    cwd: frontend
+    timeout_seconds: 600
+
+steps:
+  - id: sqlite-foundation
+    objective: Replace ad hoc schema creation with one versioned SQLite baseline containing the final hardening schema.
+    instructions: |
+      Add Alembic through uv and create a clean initial migration for the final schema needed by this roadmap, including durable refresh/download lease metadata, immutable model identity fields, and composite indexes for the known list, claim, and active-refresh queries.
+      Run migrations programmatically before seed/default initialization, remove create_all and bespoke ALTER TABLE handling from application startup, and fail with a clear reset-required message for an unversioned legacy database rather than deleting it automatically.
+      Configure every SQLite connection with foreign keys enabled, WAL journaling, and an explicit busy timeout. Centralize test database construction so migration-backed integration tests and fast metadata-backed unit tests cannot silently diverge.
+    non_goals:
+      - Implement job recovery, transition policy, or query refactors assigned to later steps.
+    acceptance:
+      - id: blank-database-migration
+        statement: A blank data directory is upgraded to the current schema and receives default settings, sources, and analysis profiles exactly once.
+      - id: legacy-database-reset
+        statement: An unversioned alpha database is rejected with actionable reset instructions and is never silently modified or deleted.
+      - id: sqlite-runtime-pragmas
+        statement: Production and migration-backed test connections enforce foreign keys, WAL mode where supported, and the configured busy timeout.
+      - id: migration-schema-parity
+        statement: Automated tests detect any difference between the migrated schema and SQLModel metadata, including indexes and recovery/model identity columns.
+    expected_change_areas:
+      - pyproject.toml
+      - uv.lock
+      - alembic.ini
+      - migrations/
+      - upvote_monitor/db/engine.py
+      - upvote_monitor/db/models.py
+      - tests/conftest.py
+      - tests/test_db_migrations.py
+    focused_checks:
+      - run: uv run pytest tests/test_db_migrations.py
+        cwd: .
+        timeout_seconds: 300
+
+  - id: workflow-state-machine
+    objective: Enforce one coherent approval and download state machine across all API callers.
+    instructions: |
+      Centralize approval transitions in the media workflow service and route item-level and attachment-level endpoints through it.
+      Reject approval changes while a download is in progress and after it is completed, returning a consistent conflict response; continue to allow illustration-label-only updates after completion.
+      Make file listing and serving require both approved and completed state, keep download readiness and errors consistent with every allowed transition, and emit the existing queue/item events after committed changes. Update frontend callers, response handling, fixtures, and tests for the stricter contract.
+    acceptance:
+      - id: completed-decision-immutable
+        statement: Item and media approval endpoints return a conflict without changing data when the item download is in progress or completed.
+      - id: completed-label-editable
+        statement: Illustration labels can still be changed after download completion without changing approval, download state, or archived files.
+      - id: archived-file-guard
+        statement: File listing and serving return not found unless the item is both approved and completed, so contradictory states never expose artifacts.
+      - id: transition-event-consistency
+        statement: Every successful approval transition commits parent and attachment state before broadcasting the corresponding queue or item event.
+    expected_change_areas:
+      - upvote_monitor/services/media_workflow.py
+      - upvote_monitor/api/items.py
+      - upvote_monitor/api/media.py
+      - upvote_monitor/services/download.py
+      - frontend/src/lib/api/client.ts
+      - frontend/src/routes/+page.svelte
+      - frontend/src/routes/items/[id]/+page.svelte
+      - tests/test_media_workflow.py
+      - tests/test_backend_fixes.py
+    focused_checks:
+      - run: uv run pytest tests/test_media_workflow.py tests/test_backend_fixes.py
+        cwd: .
+        timeout_seconds: 600
+
+  - id: durable-job-recovery
+    objective: Make refresh and download work recover automatically after interruption without duplicate execution.
+    instructions: |
+      Replace process-local active-work assumptions with database-checked leases and claim tokens using the persisted metadata from the baseline schema.
+      Heartbeat active refreshes and downloads, reconcile abandoned queued/running refreshes to failed and abandoned downloads to retryable failed state at startup and before new claims, and record an actionable interruption error.
+      Make refresh creation, download claiming, completion, and failure idempotent so a stale worker cannot overwrite a newer claim. Keep APScheduler and the SSE bus single-process, but ensure scheduler submission failures cannot leave a permanent queued row.
+    acceptance:
+      - id: stale-refresh-recovered
+        statement: Restart reconciliation marks abandoned queued or running refreshes failed and permits a new refresh immediately.
+      - id: stale-download-recovered
+        statement: Restart reconciliation converts abandoned in-progress downloads to retryable failed state without changing approval decisions.
+      - id: stale-worker-fenced
+        statement: A worker with an expired claim token cannot complete or fail work that has since been reclaimed.
+      - id: atomic-active-refresh
+        statement: Concurrent refresh requests create at most one active refresh and all other requests receive the existing conflict behavior.
+    expected_change_areas:
+      - upvote_monitor/app.py
+      - upvote_monitor/scheduler.py
+      - upvote_monitor/services/refresh.py
+      - upvote_monitor/services/download.py
+      - upvote_monitor/services/refresh_status.py
+      - tests/test_refresh_recovery.py
+      - tests/test_download_recovery.py
+      - tests/test_backend_fixes.py
+    focused_checks:
+      - run: uv run pytest tests/test_refresh_recovery.py tests/test_download_recovery.py tests/test_backend_fixes.py
+        cwd: .
+        timeout_seconds: 600
+
+  - id: bounded-query-paths
+    objective: Make list and ingestion database work scale with the requested batch instead of archive size or row count.
+    instructions: |
+      Replace per-row response serialization queries with bulk projections for attachments, active analyses, analysis history, counts, profiles, and display thresholds.
+      Make /api/media cursor-only by removing offset input and total/offset response fields, then update TypeScript types, frontend callers, API tests, and fixtures. Keep the item archive's offset pagination and total because that UI uses both.
+      Use the baseline composite indexes for filter/order paths and replace the full ReviewItem ingest load with batched source-key existence checks or conflict-safe inserts. Add SQL statement-count regression tests for populated list responses.
+    acceptance:
+      - id: media-query-budget
+        statement: Serializing a 120-row media page with analysis history executes no more than six SQL statements, independent of row count.
+      - id: item-query-budget
+        statement: Serializing a 100-row item page executes no more than eight SQL statements, independent of row count.
+      - id: cursor-only-media-contract
+        statement: The media API and frontend use only cursor pagination and no longer calculate or expose a total count or offset.
+      - id: bounded-ingest-deduplication
+        statement: Ingest duplicate detection does not load all archived ReviewItem rows and remains correct across providers and within one batch.
+    expected_change_areas:
+      - upvote_monitor/api/items.py
+      - upvote_monitor/api/media.py
+      - upvote_monitor/schemas/items.py
+      - upvote_monitor/services/ingest.py
+      - upvote_monitor/services/tagging/analysis.py
+      - frontend/src/lib/types/api.ts
+      - frontend/src/routes/+page.svelte
+      - tests/test_query_efficiency.py
+      - tests/test_media_workflow.py
+      - tests/test_sources_ingest.py
+    focused_checks:
+      - run: uv run pytest tests/test_query_efficiency.py tests/test_media_workflow.py tests/test_sources_ingest.py
+        cwd: .
+        timeout_seconds: 600
+
+  - id: reproducible-short-analysis
+    objective: Make model results reproducible while keeping inference outside long SQLite write transactions.
+    instructions: |
+      Resolve every built-in Hugging Face model to a literal immutable commit SHA and use that revision for all model and metadata downloads.
+      Persist the resolved revision, model file checksum, preprocessing version, and scoring version with each analysis; update profile IDs, settings/UI display, documentation, and fixtures so mutable main results are not represented as equivalent.
+      Refactor batch analysis into short read/compute/write phases: fetch and inference occur without an open write transaction, then a fresh short transaction rechecks eligibility and atomically upserts the result and any auto-approval. Commit per attachment or bounded batch and tolerate another reviewer changing state during inference.
+    acceptance:
+      - id: immutable-model-identity
+        statement: Every built-in profile and stored analysis identifies an immutable commit revision and records model checksum, preprocessing version, and scoring version.
+      - id: no-main-analysis-version
+        statement: No newly generated analysis stores main or another mutable alias as its model version.
+      - id: short-analysis-transactions
+        statement: Preview fetching, model loading, and inference execute outside SQLite write transactions, with eligibility rechecked before persistence.
+      - id: concurrent-analysis-decision
+        statement: A manual decision committed during inference is preserved and cannot be overwritten by late auto-approval.
+    expected_change_areas:
+      - upvote_monitor/services/tagging/profiles.py
+      - upvote_monitor/services/tagging/analysis.py
+      - upvote_monitor/services/tagging/wd_tagger.py
+      - upvote_monitor/services/tagging/pixai_tagger.py
+      - upvote_monitor/schemas/items.py
+      - upvote_monitor/schemas/settings.py
+      - frontend/src/lib/types/api.ts
+      - frontend/src/routes/settings/tagger/+page.svelte
+      - docs/image-tagger-models.md
+      - docs/image-understanding-models.md
+      - tests/test_tagging_analysis.py
+      - tests/test_model_profiles.py
+    focused_checks:
+      - run: uv run pytest tests/test_tagging_analysis.py tests/test_model_profiles.py
+        cwd: .
+        timeout_seconds: 900
+
+  - id: atomic-external-io
+    objective: Prevent memory spikes, partial files, secret corruption, and harmless upstream schema additions from breaking workflows.
+    instructions: |
+      Stream HTTP media downloads in bounded chunks to unique temporary files, heartbeat the active claim during progress, fsync completed content, and atomically rename only after a successful response; clean temporary files on every failure.
+      Serialize secret-store updates under a lock and write encrypted data through a same-directory temporary file with fsync and atomic replacement so crashes and concurrent settings requests retain the last complete document.
+      Make Reddit response models ignore unknown upstream fields while preserving strict validation for every consumed field. Add failure-injection tests for interrupted downloads and secret writes plus a fixture containing unknown Reddit fields.
+    acceptance:
+      - id: streamed-atomic-download
+        statement: HTTP downloads never buffer the complete response in memory and expose no partial target file after interruption or failure.
+      - id: atomic-secret-replacement
+        statement: Concurrent or interrupted secret updates leave either the previous or next decryptable complete secret document, never a truncated file.
+      - id: tolerant-reddit-envelope
+        statement: Unknown Reddit response fields are ignored while missing or invalid consumed fields still fail validation.
+    expected_change_areas:
+      - upvote_monitor/functions.py
+      - upvote_monitor/services/download.py
+      - upvote_monitor/services/secrets.py
+      - upvote_monitor/models/strict.py
+      - upvote_monitor/models/
+      - upvote_monitor/upvoted.py
+      - tests/test_download_io.py
+      - tests/test_secrets.py
+      - tests/test_sources_ingest.py
+    focused_checks:
+      - run: uv run pytest tests/test_download_io.py tests/test_secrets.py tests/test_sources_ingest.py
+        cwd: .
+        timeout_seconds: 600
+
+  - id: lifecycle-integration-coverage
+    objective: Lock the hardened behavior in through application-level tests and concise operator documentation.
+    instructions: |
+      Add FastAPI lifespan and route integration tests using isolated migrated databases, controlled scheduler/background work, and SSE subscriptions.
+      Cover blank startup, reset-required legacy startup, stale-work reconciliation, refresh conflicts and failures, completed-decision conflicts, file authorization guards, download status events, and graceful scheduler shutdown.
+      Document the local single-process deployment invariant, one-time alpha database reset, automatic migrations after the baseline, immutable completed decisions, recovery behavior, model identity, and relevant verification commands in README.md.
+    acceptance:
+      - id: lifespan-integration
+        statement: Integration tests exercise startup migration/seeding, recovery, scheduler startup, and shutdown without touching /data or external networks.
+      - id: route-integration
+        statement: Route tests cover decision conflicts, refresh lifecycle, file guards, and persisted error responses through the ASGI application.
+      - id: event-integration
+        statement: SSE tests confirm committed refresh, queue, and download changes produce the expected events without leaking subscriptions after disconnect.
+      - id: operator-documentation
+        statement: README.md gives a local operator exact reset, migration, recovery, model-version, and full-verification guidance consistent with the implementation.
+    expected_change_areas:
+      - README.md
+      - upvote_monitor/app.py
+      - upvote_monitor/api/events.py
+      - upvote_monitor/services/event_bus.py
+      - tests/test_app_lifecycle.py
+      - tests/test_api_integration.py
+      - tests/test_events.py
+    focused_checks:
+      - run: uv run pytest tests/test_app_lifecycle.py tests/test_api_integration.py tests/test_events.py
+        cwd: .
+        timeout_seconds: 900
+
+final_acceptance:
+  - A local installation starts from the versioned schema, recovers abandoned work, and never remains permanently blocked by stale refresh or download state.
+  - Approval, download, and file-serving state cannot contradict one another, and completed approval decisions are immutable while labels remain editable.
+  - Media and item list query counts remain bounded by page shape rather than row count, and ingestion does not scale with the complete archive.
+  - Analyses identify immutable model artifacts and are persisted through short transactions that preserve concurrent manual decisions.
+  - Downloads and secret updates are atomic, Reddit parsing tolerates unused upstream fields, and all declared Python and frontend regression commands pass.
