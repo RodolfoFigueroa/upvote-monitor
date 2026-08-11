@@ -23,7 +23,7 @@ from upvote_monitor.schemas.items import (
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import get_preview_urls, run_download_background
 from upvote_monitor.services.media_workflow import (
-    ReopenMediaConflictError,
+    ApprovalTransitionConflictError,
     reopen_rejected_media_for_item,
     set_item_media_approval,
 )
@@ -181,9 +181,13 @@ def approve_item(
     session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
-    item = set_item_media_approval(session, item, ApprovalStatus.APPROVED)
+    try:
+        item = set_item_media_approval(session, item, ApprovalStatus.APPROVED)
+    except ApprovalTransitionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     session.refresh(item)
+    broadcast_review_queue_changed(reason="item_decision")
 
     if item.download_status in (DownloadStatus.PENDING, DownloadStatus.FAILED):
         background_tasks.add_task(run_download_background, item_id)
@@ -196,9 +200,13 @@ def reject_item(
     session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemDetail:
     item = _get_item_or_404(session, item_id)
-    item = set_item_media_approval(session, item, ApprovalStatus.REJECTED)
+    try:
+        item = set_item_media_approval(session, item, ApprovalStatus.REJECTED)
+    except ApprovalTransitionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     session.refresh(item)
+    broadcast_review_queue_changed(reason="item_decision")
     return ItemDetail.from_db(item, session)
 
 
@@ -210,7 +218,7 @@ def reopen_rejected_media(
     item = _get_item_or_404(session, item_id)
     try:
         item = reopen_rejected_media_for_item(session, item)
-    except ReopenMediaConflictError as exc:
+    except ApprovalTransitionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     session.commit()
@@ -275,8 +283,12 @@ def get_item_media(
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     item = _get_item_or_404(session, item_id)
-    if item.download_dir is None:
-        raise HTTPException(status_code=404, detail="Item has not been downloaded")
+    if (
+        item.approval_status != ApprovalStatus.APPROVED
+        or item.download_status != DownloadStatus.COMPLETED
+        or item.download_dir is None
+    ):
+        raise HTTPException(status_code=404, detail="Archived media not found")
 
     download_dir = Path(item.download_dir).resolve()
     file_path = (download_dir / filename).resolve()
@@ -296,8 +308,12 @@ def list_item_files(
     session: Annotated[Session, Depends(get_db_session)],
 ) -> ItemFilesResponse:
     item = _get_item_or_404(session, item_id)
-    if item.download_dir is None:
-        raise HTTPException(status_code=404, detail="Item has not been downloaded")
+    if (
+        item.approval_status != ApprovalStatus.APPROVED
+        or item.download_status != DownloadStatus.COMPLETED
+        or item.download_dir is None
+    ):
+        raise HTTPException(status_code=404, detail="Archived media not found")
 
     download_dir = Path(item.download_dir)
     if not download_dir.is_dir():

@@ -7,7 +7,7 @@ from pydantic import JsonValue
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
-from upvote_monitor.api.items import reopen_rejected_media
+from upvote_monitor.api.items import approve_item, reject_item, reopen_rejected_media
 from upvote_monitor.api.media import (
     MediaListFilters,
     reopen_media,
@@ -245,6 +245,46 @@ def test_approval_media_update_broadcasts_queue_change(
         ]
 
 
+def test_media_approval_broadcast_observes_committed_parent_and_attachment(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[ApprovalStatus, ApprovalStatus]] = []
+
+    def observe_commit(*_args: object, **_kwargs: object) -> None:
+        with Session(engine) as observer:
+            stored_item = observer.get(ReviewItem, "commit-before-event")
+            stored_attachment = observer.get(MediaAttachment, attachment.id)
+            assert stored_item is not None
+            assert stored_attachment is not None
+            observed.append(
+                (stored_item.approval_status, stored_attachment.approval_status),
+            )
+
+    monkeypatch.setattr(
+        "upvote_monitor.api.media.broadcast_review_queue_changed",
+        observe_commit,
+    )
+
+    with Session(engine) as session:
+        item = make_item("commit-before-event")
+        attachment = make_attachment(item.id, 0)
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        assert attachment.id is not None
+        update_media(
+            attachment.id,
+            MediaUpdate(approval_status="approved"),
+            BackgroundTasks(),
+            session,
+        )
+
+    assert observed == [(ApprovalStatus.APPROVED, ApprovalStatus.APPROVED)]
+
+
 def test_media_api_preserves_preview_index_for_gallery_media(engine: Engine) -> None:
     with Session(engine) as session:
         item = make_item("gallery-previews")
@@ -444,7 +484,7 @@ def test_approved_media_reopen_is_limited_to_undo_window(engine: Engine) -> None
         assert exc_info.value.status_code == 409
 
 
-def test_item_reopen_only_reopens_rejected_media_and_keeps_files(
+def test_completed_item_reopen_is_rejected_without_changing_state(
     engine: Engine,
 ) -> None:
     with Session(engine) as session:
@@ -471,17 +511,136 @@ def test_item_reopen_only_reopens_rejected_media_and_keeps_files(
         session.refresh(approved)
         session.refresh(rejected)
 
-        reopened = reopen_rejected_media(item.id, session)
+        with pytest.raises(HTTPException) as exc_info:
+            reopen_rejected_media(item.id, session)
         session.refresh(approved)
         session.refresh(rejected)
 
-        assert reopened.approval_status == "under_review"
+        assert exc_info.value.status_code == 409
         assert approved.approval_status == ApprovalStatus.APPROVED
-        assert rejected.approval_status == ApprovalStatus.UNDER_REVIEW
-        assert reopened.download_status == "pending"
+        assert rejected.approval_status == ApprovalStatus.REJECTED
         stored_item = session.get(ReviewItem, item.id)
         assert stored_item is not None
+        assert stored_item.approval_status == ApprovalStatus.APPROVED
+        assert stored_item.download_status == DownloadStatus.COMPLETED
         assert stored_item.download_dir == "/download/reopen-item"
+
+
+@pytest.mark.parametrize(
+    "download_status",
+    [DownloadStatus.IN_PROGRESS, DownloadStatus.COMPLETED],
+)
+@pytest.mark.parametrize("decision", ["approve", "reject", "media"])
+def test_approval_endpoints_reject_immutable_download_states(
+    engine: Engine,
+    download_status: DownloadStatus,
+    decision: str,
+) -> None:
+    with Session(engine) as session:
+        item = make_item(f"immutable-{download_status.value}-{decision}")
+        item.download_status = download_status
+        attachment = make_attachment(item.id, 0)
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        def make_request() -> None:
+            if decision == "approve":
+                approve_item(item.id, BackgroundTasks(), session)
+            elif decision == "reject":
+                reject_item(item.id, session)
+            else:
+                assert attachment.id is not None
+                update_media(
+                    attachment.id,
+                    MediaUpdate(approval_status="approved"),
+                    BackgroundTasks(),
+                    session,
+                )
+
+        with pytest.raises(HTTPException) as exc_info:
+            make_request()
+
+        assert exc_info.value.status_code == 409
+        session.rollback()
+        session.refresh(item)
+        session.refresh(attachment)
+        assert item.approval_status == ApprovalStatus.UNDER_REVIEW
+        assert item.download_status == download_status
+        assert attachment.approval_status == ApprovalStatus.UNDER_REVIEW
+
+
+def test_completed_media_label_update_preserves_download_and_files(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        item = make_item(
+            "completed-label",
+            approval_status=ApprovalStatus.APPROVED,
+            download_status=DownloadStatus.COMPLETED,
+        )
+        item.download_dir = "/download/completed-label"
+        attachment = make_attachment(
+            item.id,
+            0,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        assert attachment.id is not None
+        updated = update_media(
+            attachment.id,
+            MediaUpdate(illustration_label="yes"),
+            BackgroundTasks(),
+            session,
+        )
+        session.refresh(item)
+        session.refresh(attachment)
+
+        assert updated.illustration_label == "yes"
+        assert attachment.approval_status == ApprovalStatus.APPROVED
+        assert item.approval_status == ApprovalStatus.APPROVED
+        assert item.download_status == DownloadStatus.COMPLETED
+        assert item.download_dir == "/download/completed-label"
+
+
+def test_changed_approval_resets_failed_download_readiness_and_error(
+    engine: Engine,
+) -> None:
+    with Session(engine) as session:
+        item = make_item(
+            "failed-decision",
+            approval_status=ApprovalStatus.APPROVED,
+            download_status=DownloadStatus.FAILED,
+        )
+        item.download_error = "old selection failed"
+        attachment = make_attachment(
+            item.id,
+            0,
+            approval_status=ApprovalStatus.APPROVED,
+        )
+        session.add(item)
+        session.add(attachment)
+        session.commit()
+        session.refresh(attachment)
+
+        assert attachment.id is not None
+        update_media(
+            attachment.id,
+            MediaUpdate(approval_status="rejected"),
+            BackgroundTasks(),
+            session,
+        )
+        session.refresh(item)
+
+        assert item.approval_status == ApprovalStatus.REJECTED
+        assert item.download_status == DownloadStatus.PENDING
+        assert item.download_ready_at is None
+        assert item.download_error is None
 
 
 def test_newly_approved_items_wait_for_download_grace_period(

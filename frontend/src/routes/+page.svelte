@@ -13,7 +13,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import MediaAnalysisPanel from '$lib/components/MediaAnalysisPanel.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
-  import { api } from '$lib/api/client';
+  import { api, ApiError } from '$lib/api/client';
   import { formatRelative, isVideoUrl, statusLabel } from '$lib/format';
   import { subscribeReviewQueueChanged } from '$lib/sse/store.svelte';
   import type {
@@ -588,6 +588,9 @@
       nextCursor = previousCursor;
       decidedMediaIds = previousDecidedIds;
       actionError = e instanceof Error ? e.message : 'Action failed';
+      if (e instanceof ApiError && e.status === 409) {
+        void load({ quiet: true });
+      }
     } finally {
       const { [mediaId]: _, ...rest } = pendingActions;
       pendingActions = rest;

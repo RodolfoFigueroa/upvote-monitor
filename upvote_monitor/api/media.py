@@ -25,7 +25,7 @@ from upvote_monitor.schemas.items import (
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import run_download_background
 from upvote_monitor.services.media_workflow import (
-    ReopenMediaConflictError,
+    ApprovalTransitionConflictError,
     reopen_media_for_review,
     set_media_decision,
 )
@@ -304,12 +304,15 @@ def update_media(
         )
     changed_approval = approval_status is not None
 
-    updated_item = set_media_decision(
-        session,
-        attachment,
-        approval_status=approval_status,
-        illustration_label=illustration_label,
-    )
+    try:
+        updated_item = set_media_decision(
+            session,
+            attachment,
+            approval_status=approval_status,
+            illustration_label=illustration_label,
+        )
+    except ApprovalTransitionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
 
     session.refresh(attachment)
@@ -339,7 +342,7 @@ def reopen_media(
     attachment, item = _get_media_or_404(session, media_id)
     try:
         updated_item = reopen_media_for_review(session, attachment)
-    except ReopenMediaConflictError as exc:
+    except ApprovalTransitionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     session.commit()
