@@ -25,16 +25,22 @@ __all__ = ["app", "create_app", "settings"]
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     set_event_loop(asyncio.get_running_loop())
-    should_queue_initial_refresh = init_db()
-    with Session(engine) as session:
-        # A fresh application process cannot own claims left by its predecessor.
-        reconcile_abandoned_refreshes(session, force=True)
-        reconcile_abandoned_downloads(session, force=True)
-    start_scheduler()
-    if should_queue_initial_refresh:
-        queue_refresh_run()
-    yield
-    shutdown_scheduler()
+    scheduler_started = False
+    try:
+        should_queue_initial_refresh = init_db()
+        with Session(engine) as session:
+            # A fresh application process cannot own claims left by its predecessor.
+            reconcile_abandoned_refreshes(session, force=True)
+            reconcile_abandoned_downloads(session, force=True)
+        scheduler_started = True
+        start_scheduler()
+        if should_queue_initial_refresh:
+            queue_refresh_run()
+        yield
+    finally:
+        if scheduler_started:
+            shutdown_scheduler()
+        set_event_loop(None)
 
 
 def create_app() -> FastAPI:

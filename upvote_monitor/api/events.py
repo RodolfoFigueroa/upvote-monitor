@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -11,7 +11,7 @@ from upvote_monitor.services.refresh_status import get_refresh_status
 router = APIRouter(prefix="/events", tags=["events"])
 
 
-async def _event_stream() -> AsyncIterator[str]:
+async def event_stream() -> AsyncGenerator[str]:
     queue = subscribe()
     try:
         yield format_sse("connected", {})
@@ -30,7 +30,7 @@ async def _event_stream() -> AsyncIterator[str]:
 @router.get("")
 async def stream_events() -> StreamingResponse:
     return StreamingResponse(
-        _event_stream(),
+        event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
