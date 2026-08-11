@@ -4,8 +4,10 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from hashlib import sha256
+from itertools import batched
 
-from sqlmodel import Session, select
+from sqlalchemy import tuple_
+from sqlmodel import Session, col, select
 
 from upvote_monitor.db.models import (
     AppSettings,
@@ -29,6 +31,7 @@ from upvote_monitor.services.source_settings import (
 from upvote_monitor.sources import RedditProvider, SourceItem, SourceProvider, XProvider
 
 logger = logging.getLogger(__name__)
+INGEST_DEDUPLICATION_BATCH_SIZE = 400
 
 
 @dataclass
@@ -129,9 +132,20 @@ def item_id_for_source(source: str, source_item_id: str) -> str:
     return f"{safe_source}_{safe_item_id}_{digest}"
 
 
-def _existing_source_keys(session: Session) -> set[tuple[str, str]]:
-    items = session.exec(select(ReviewItem)).all()
-    return {(item.source, item.source_item_id) for item in items}
+def _existing_source_keys(
+    session: Session,
+    source_keys: set[tuple[str, str]],
+) -> set[tuple[str, str]]:
+    if not source_keys:
+        return set()
+    rows = session.exec(
+        select(col(ReviewItem.source), col(ReviewItem.source_item_id)).where(
+            tuple_(col(ReviewItem.source), col(ReviewItem.source_item_id)).in_(
+                source_keys,
+            ),
+        ),
+    ).all()
+    return {(source, source_item_id) for source, source_item_id in rows}
 
 
 def _review_item_from_source_item(source_item: SourceItem) -> ReviewItem:
@@ -186,7 +200,7 @@ def ingest_items(
         raise RuntimeError(msg)
 
     whitelist, blacklist = load_rule_sets(session)
-    existing_keys = _existing_source_keys(session)
+    inserted_keys: set[tuple[str, str]] = set()
 
     new_items = 0
     skipped = 0
@@ -202,40 +216,51 @@ def ingest_items(
         provider_source = getattr(provider, "source", provider.__class__.__name__)
         provider_new_items = 0
         provider_skipped = 0
-        for source_item in provider.iter_liked_items():
-            if not source_item.media:
-                skipped += 1
-                provider_skipped += 1
-                continue
+        for source_items in batched(
+            provider.iter_liked_items(),
+            INGEST_DEDUPLICATION_BATCH_SIZE,
+            strict=False,
+        ):
+            candidate_keys = {
+                (source_item.source, source_item.source_item_id)
+                for source_item in source_items
+                if source_item.media
+            }
+            existing_keys = _existing_source_keys(session, candidate_keys)
 
-            source_key = (source_item.source, source_item.source_item_id)
-            if source_key in existing_keys:
-                skipped += 1
-                provider_skipped += 1
-                continue
+            for source_item in source_items:
+                if not source_item.media:
+                    skipped += 1
+                    provider_skipped += 1
+                    continue
 
-            item = _review_item_from_source_item(source_item)
-            item.approval_status = compute_initial_status(
-                item,
-                settings.approval_mode,
-                whitelist,
-                blacklist,
-            )
+                source_key = (source_item.source, source_item.source_item_id)
+                if source_key in existing_keys or source_key in inserted_keys:
+                    skipped += 1
+                    provider_skipped += 1
+                    continue
 
-            session.add(item)
-            # SQLModel has no ORM relationship here to order dependent inserts.
-            # Persist the parent first now that SQLite foreign keys are enforced.
-            session.flush()
-            for attachment in _attachments_from_source_item(
-                source_item,
-                item.id,
-                item.approval_status,
-            ):
-                session.add(attachment)
+                item = _review_item_from_source_item(source_item)
+                item.approval_status = compute_initial_status(
+                    item,
+                    settings.approval_mode,
+                    whitelist,
+                    blacklist,
+                )
 
-            existing_keys.add(source_key)
-            new_items += 1
-            provider_new_items += 1
+                session.add(item)
+                # Persist the parent before its foreign-key dependent attachments.
+                session.flush()
+                for attachment in _attachments_from_source_item(
+                    source_item,
+                    item.id,
+                    item.approval_status,
+                ):
+                    session.add(attachment)
+
+                inserted_keys.add(source_key)
+                new_items += 1
+                provider_new_items += 1
 
         logger.info(
             "Source refresh completed for %s: %s new, %s skipped",

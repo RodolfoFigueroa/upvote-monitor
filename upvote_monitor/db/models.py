@@ -44,6 +44,19 @@ class ReviewItem(SQLModel, table=True):
             "id",
         ),
         Index("ix_review_items_created_cursor", "created_at", "id"),
+        Index("ix_review_items_source_created", "source", "created_at", "id"),
+        Index(
+            "ix_review_items_community_created",
+            "community_name",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_review_items_author_created",
+            "author_name",
+            "created_at",
+            "id",
+        ),
         Index(
             "ix_review_items_download_recovery",
             "download_status",
@@ -83,6 +96,21 @@ class MediaAttachment(SQLModel, table=True):
             "item_id",
             "sort_index",
             name="uq_media_attachment_item_sort",
+        ),
+        Index("ix_media_attachments_item_order", "item_id", "sort_index", "id"),
+        Index(
+            "ix_media_attachments_approval_item_order",
+            "approval_status",
+            "item_id",
+            "sort_index",
+            "id",
+        ),
+        Index(
+            "ix_media_attachments_label_item_order",
+            "illustration_label",
+            "item_id",
+            "sort_index",
+            "id",
         ),
     )
 
@@ -135,6 +163,11 @@ class MediaAnalysis(SQLModel, table=True):
             "attachment_id",
             "analysis_profile_id",
             name="uq_media_analysis_attachment_profile",
+        ),
+        Index(
+            "ix_media_analyses_attachment_analyzed",
+            "attachment_id",
+            "analyzed_at",
         ),
     )
 

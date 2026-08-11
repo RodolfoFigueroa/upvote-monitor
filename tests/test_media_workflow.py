@@ -157,10 +157,11 @@ def test_media_api_lists_and_updates_media_workflow_state(engine: Engine) -> Non
             community=None,
             author=None,
             limit=50,
-            offset=0,
             cursor=None,
         )
-        assert listed.total == 1
+        assert len(listed.media) == 1
+        assert "offset" not in MediaListFilters.model_fields
+        assert set(listed.model_dump()) == {"media", "limit", "next_cursor"}
         assert listed.media[0].illustration_label == "yes"
 
         assert second.id is not None
@@ -302,7 +303,6 @@ def test_media_api_preserves_preview_index_for_gallery_media(engine: Engine) -> 
             community=None,
             author=None,
             limit=50,
-            offset=0,
             cursor=None,
         )
 
@@ -335,7 +335,6 @@ def test_media_api_cursor_pages_are_ordered_and_non_overlapping(
             community=None,
             author=None,
             limit=2,
-            offset=0,
             cursor=None,
         )
         assert first_page.next_cursor is not None
@@ -353,7 +352,6 @@ def test_media_api_cursor_pages_are_ordered_and_non_overlapping(
             community=None,
             author=None,
             limit=2,
-            offset=0,
             cursor=first_page.next_cursor,
         )
         assert second_page.next_cursor is None
@@ -385,7 +383,6 @@ def test_media_api_cursor_continues_after_prior_row_is_reviewed(
             community=None,
             author=None,
             limit=1,
-            offset=0,
             cursor=None,
         )
         assert first_page.next_cursor is not None
@@ -403,7 +400,6 @@ def test_media_api_cursor_continues_after_prior_row_is_reviewed(
             community=None,
             author=None,
             limit=2,
-            offset=0,
             cursor=first_page.next_cursor,
         )
         assert [media.sort_index for media in second_page.media] == [1, 2]

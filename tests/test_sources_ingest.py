@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -163,6 +164,66 @@ def test_ingest_stores_generic_items_and_applies_rules(engine: Engine) -> None:
     assert item_status == ApprovalStatus.APPROVED
     assert attachment_item_id == item_id
     assert attachment_download_url == "https://example.com/source.jpg"
+
+
+def test_ingest_deduplicates_by_provider_key_and_within_refresh(
+    engine: Engine,
+) -> None:
+    base_item = next(FakeProvider().iter_liked_items())
+
+    class BatchProvider:
+        def __init__(self, source: str, items: list[SourceItem]) -> None:
+            self.source = source
+            self.items = items
+
+        def iter_liked_items(self) -> Iterator[SourceItem]:
+            yield from self.items
+
+    archived = replace(base_item, source="reddit", source_item_id="archived")
+    batch_duplicate = replace(base_item, source="reddit", source_item_id="batch")
+    reddit_shared = replace(base_item, source="reddit", source_item_id="shared")
+    x_shared = replace(base_item, source="x", source_item_id="shared")
+
+    with Session(engine) as session:
+        session.add(AppSettings(id=1))
+        session.add(
+            ReviewItem(
+                id="reddit_archived",
+                source="reddit",
+                source_item_id="archived",
+                title="Archived",
+                item_kind="image",
+                source_url="https://example.com/archived",
+                created_at=datetime.now(UTC),
+                approval_status=ApprovalStatus.UNDER_REVIEW,
+                raw_data_json="{}",
+                media_count=1,
+            ),
+        )
+        session.commit()
+
+        result = ingest_items(
+            session,
+            providers=[
+                BatchProvider(
+                    "reddit",
+                    [archived, batch_duplicate, batch_duplicate, reddit_shared],
+                ),
+                BatchProvider("mixed", [x_shared, batch_duplicate]),
+            ],
+        )
+        stored_keys = set(
+            session.exec(select(ReviewItem.source, ReviewItem.source_item_id)).all(),
+        )
+
+    assert result.new_items == 3
+    assert result.skipped == 3
+    assert stored_keys == {
+        ("reddit", "archived"),
+        ("reddit", "batch"),
+        ("reddit", "shared"),
+        ("x", "shared"),
+    }
 
 
 class XFakeProvider:

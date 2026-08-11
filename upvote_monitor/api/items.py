@@ -19,6 +19,7 @@ from upvote_monitor.schemas.items import (
     ItemFilesResponse,
     ItemListResponse,
     ItemSummary,
+    ResponseProjection,
 )
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import get_preview_urls, run_download_background
@@ -135,9 +136,10 @@ def list_items(
 
     items = session.exec(query).all()
     total = session.exec(count_query).one()
+    projection = ResponseProjection.load(session, [item.id for item in items])
 
     return ItemListResponse(
-        items=[ItemSummary.from_db(item, session) for item in items],
+        items=[ItemSummary.from_db(item, session, projection) for item in items],
         total=total,
         limit=filters.limit,
         offset=filters.offset,

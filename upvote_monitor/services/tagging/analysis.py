@@ -212,6 +212,27 @@ def get_attachment_analyses(
     )
 
 
+def get_analyses_for_attachments(
+    session: Session,
+    attachment_ids: list[int],
+) -> dict[int, list[MediaAnalysis]]:
+    """Load complete analysis history for a bounded attachment page."""
+    if not attachment_ids:
+        return {}
+    rows = session.exec(
+        select(MediaAnalysis)
+        .where(col(MediaAnalysis.attachment_id).in_(attachment_ids))
+        .order_by(
+            col(MediaAnalysis.attachment_id),
+            col(MediaAnalysis.analyzed_at).desc(),
+        ),
+    ).all()
+    result: dict[int, list[MediaAnalysis]] = {}
+    for row in rows:
+        result.setdefault(row.attachment_id, []).append(row)
+    return result
+
+
 def get_item_analysis_summary(
     session: Session,
     item_id: str,

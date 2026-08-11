@@ -127,9 +127,7 @@ export interface MediaItem {
 
 export interface MediaListResponse {
   media: MediaItem[];
-  total: number;
   limit: number;
-  offset: number;
   next_cursor: string | null;
 }
 
@@ -297,7 +295,6 @@ export interface MediaListParams {
   community?: string;
   author?: string;
   limit?: number;
-  offset?: number;
   cursor?: string;
 }
 

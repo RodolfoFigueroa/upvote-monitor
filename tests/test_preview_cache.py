@@ -261,17 +261,9 @@ def test_preview_endpoint_removes_partial_oversized_downloads(
 
 
 def test_approve_and_reject_delete_preview_cache(
-    monkeypatch: pytest.MonkeyPatch,
     preview_cache_dir: Path,
     engine: Engine,
 ) -> None:
-    monkeypatch.setattr("upvote_monitor.schemas.items.get_preview_urls", lambda *_: [])
-    monkeypatch.setattr("upvote_monitor.schemas.items.get_source_urls", lambda *_: [])
-    monkeypatch.setattr(
-        "upvote_monitor.schemas.items.get_media_attachments",
-        lambda *_: [],
-    )
-
     with Session(engine) as session:
         for item_id in ("approve-cache", "reject-cache"):
             session.add(make_item(item_id))

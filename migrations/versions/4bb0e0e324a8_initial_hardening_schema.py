@@ -186,9 +186,21 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
+        "ix_review_items_author_created",
+        "review_items",
+        ["author_name", "created_at", "id"],
+        unique=False,
+    )
+    op.create_index(
         op.f("ix_review_items_community_name"),
         "review_items",
         ["community_name"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_review_items_community_created",
+        "review_items",
+        ["community_name", "created_at", "id"],
         unique=False,
     )
     op.create_index(
@@ -235,6 +247,12 @@ def upgrade() -> None:
     )
     op.create_index(
         op.f("ix_review_items_source"), "review_items", ["source"], unique=False
+    )
+    op.create_index(
+        "ix_review_items_source_created",
+        "review_items",
+        ["source", "created_at", "id"],
+        unique=False,
     )
     op.create_index(
         op.f("ix_review_items_source_item_id"),
@@ -333,6 +351,12 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
+        "ix_media_attachments_approval_item_order",
+        "media_attachments",
+        ["approval_status", "item_id", "sort_index", "id"],
+        unique=False,
+    )
+    op.create_index(
         op.f("ix_media_attachments_decided_at"),
         "media_attachments",
         ["decided_at"],
@@ -348,6 +372,18 @@ def upgrade() -> None:
         op.f("ix_media_attachments_item_id"),
         "media_attachments",
         ["item_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_media_attachments_item_order",
+        "media_attachments",
+        ["item_id", "sort_index", "id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_media_attachments_label_item_order",
+        "media_attachments",
+        ["illustration_label", "item_id", "sort_index", "id"],
         unique=False,
     )
     op.create_table(
@@ -397,6 +433,12 @@ def upgrade() -> None:
         op.f("ix_media_analyses_analysis_profile_id"),
         "media_analyses",
         ["analysis_profile_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_media_analyses_attachment_analyzed",
+        "media_analyses",
+        ["attachment_id", "analyzed_at"],
         unique=False,
     )
     op.create_index(
@@ -454,10 +496,19 @@ def downgrade() -> None:
         op.f("ix_media_analyses_illustration_score"), table_name="media_analyses"
     )
     op.drop_index(op.f("ix_media_analyses_attachment_id"), table_name="media_analyses")
+    op.drop_index("ix_media_analyses_attachment_analyzed", table_name="media_analyses")
     op.drop_index(
         op.f("ix_media_analyses_analysis_profile_id"), table_name="media_analyses"
     )
     op.drop_table("media_analyses")
+    op.drop_index(
+        "ix_media_attachments_label_item_order", table_name="media_attachments"
+    )
+    op.drop_index("ix_media_attachments_item_order", table_name="media_attachments")
+    op.drop_index(
+        "ix_media_attachments_approval_item_order",
+        table_name="media_attachments",
+    )
     op.drop_index(op.f("ix_media_attachments_item_id"), table_name="media_attachments")
     op.drop_index(
         op.f("ix_media_attachments_illustration_label"), table_name="media_attachments"
@@ -476,6 +527,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_source_rules_rule_type"), table_name="source_rules")
     op.drop_table("source_rules")
     op.drop_index(op.f("ix_review_items_source_item_id"), table_name="review_items")
+    op.drop_index("ix_review_items_source_created", table_name="review_items")
     op.drop_index(op.f("ix_review_items_source"), table_name="review_items")
     op.drop_index("ix_review_items_list", table_name="review_items")
     op.drop_index(op.f("ix_review_items_download_ready_at"), table_name="review_items")
@@ -488,6 +540,8 @@ def downgrade() -> None:
     )
     op.drop_index("ix_review_items_download_claim", table_name="review_items")
     op.drop_index("ix_review_items_created_cursor", table_name="review_items")
+    op.drop_index("ix_review_items_community_created", table_name="review_items")
+    op.drop_index("ix_review_items_author_created", table_name="review_items")
     op.drop_index(op.f("ix_review_items_community_name"), table_name="review_items")
     op.drop_index(op.f("ix_review_items_author_name"), table_name="review_items")
     op.drop_table("review_items")
