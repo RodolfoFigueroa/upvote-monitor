@@ -17,6 +17,7 @@ WD_COMPATIBLE_MODEL_REPOS = (
     WD_VIT_LARGE_V3_REPO_ID,
 )
 DEFAULT_MODEL_REPO_ID = WD_SWINV2_V3_REPO_ID
+DEFAULT_MODEL_REVISION = "627aef95638667ddcaa3ac8ae625e88ea5b02f51"
 MODEL_FILENAME = "model.onnx"
 TAGS_FILENAME = "selected_tags.csv"
 MODEL_CACHE_DIR = Path("/data/models/wd-tagger")
@@ -44,7 +45,7 @@ class WDTagger:
         self,
         *,
         repo_id: str = DEFAULT_MODEL_REPO_ID,
-        revision: str = "main",
+        revision: str = DEFAULT_MODEL_REVISION,
         cache_dir: Path = MODEL_CACHE_DIR,
     ) -> None:
         self.repo_id = repo_id
@@ -110,7 +111,7 @@ class WDTagger:
 @lru_cache(maxsize=4)
 def get_wd_tagger(
     repo_id: str = DEFAULT_MODEL_REPO_ID,
-    revision: str = "main",
+    revision: str = DEFAULT_MODEL_REVISION,
 ) -> WDTagger:
     return WDTagger(repo_id=repo_id, revision=revision)
 

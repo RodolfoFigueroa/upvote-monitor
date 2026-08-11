@@ -16,7 +16,7 @@ from upvote_monitor.enums import (
     RuleTargetType,
 )
 
-DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-default"
+DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-627aef95"
 DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD = 0.15
 DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD = 0.35
 

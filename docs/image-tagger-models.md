@@ -48,7 +48,17 @@ Use a pluggable tagger backend with this default order:
 6. Power-user backend: `lodestones/taggerine`
 7. Legacy fallback: DeepDanbooru ONNX ports
 
-The app should store the selected model name/version with every analysis result. This matters because tag scores are not comparable across models.
+The app stores an immutable Hugging Face commit revision, the ONNX file SHA-256,
+the preprocessing version, and the scoring version with every analysis result.
+Mutable aliases such as `main` are not analysis identities because tag scores are
+not comparable when any of those inputs changes.
+
+| Profile | Hugging Face revision | `model.onnx` SHA-256 |
+| --- | --- | --- |
+| WD SwinV2 v3 | `627aef95638667ddcaa3ac8ae625e88ea5b02f51` | `e6774bff34d43bd49f75a47db4ef217dce701c9847b546523eb85ff6dbba1db1` |
+| WD EVA02 Large v3 | `b25b82a03f7282e41aa2f257a52c7583b710bd1c` | `9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc` |
+| WD ViT Large v3 | `ae469aa2e4706a3af08d3673cf73a11d1add314c` | `e4c8001b000a6c98f2db10794f7c406daa79873d071d6ca924330fa053fa1845` |
+| PixAI Tagger v0.9 ONNX | `d8cf666911a2c3d10d586d7823259192313c7eb7` | `a8d479098b5e23f253543c93df42391736abbb77c21c2efd3a513b9cda7b3657` |
 
 Implemented WD-compatible profiles:
 
@@ -105,7 +115,10 @@ The backend should not hard-code WD-specific assumptions into the database schem
 ```json
 {
   "model": "SmilingWolf/wd-swinv2-tagger-v3",
-  "model_version": "v3",
+  "model_version": "627aef95638667ddcaa3ac8ae625e88ea5b02f51",
+  "model_revision": "627aef95638667ddcaa3ac8ae625e88ea5b02f51",
+  "model_sha256": "e6774bff34d43bd49f75a47db4ef217dce701c9847b546523eb85ff6dbba1db1",
+  "preprocessing_version": "wd-rgba-white-square-bgr-lanczos-v1",
   "illustration_score": 0.94,
   "ratings": {
     "general": 0.91,

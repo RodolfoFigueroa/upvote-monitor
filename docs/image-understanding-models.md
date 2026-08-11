@@ -51,7 +51,10 @@ Example output shape:
 ```json
 {
   "model": "google/siglip2-base-patch16-224",
-  "model_version": "revision-or-hash",
+  "model_version": "literal-commit-sha",
+  "model_revision": "literal-commit-sha",
+  "model_sha256": "sha256-of-model-file",
+  "preprocessing_version": "named-preprocessing-contract",
   "scores": {
     "2d_illustration": 0.91,
     "anime_illustration": 0.82,
@@ -90,7 +93,10 @@ Example output shape:
 ```json
 {
   "model": "MiaoshouAI/Florence-2-base-PromptGen-v2.0",
-  "model_version": "revision-or-hash",
+  "model_version": "literal-commit-sha",
+  "model_revision": "literal-commit-sha",
+  "model_sha256": "sha256-of-model-file",
+  "preprocessing_version": "named-preprocessing-contract",
   "prompt": "<MORE_DETAILED_CAPTION>",
   "caption": "A digital anime-style illustration of a character standing in a city street at night.",
   "parsed_medium_hints": {
@@ -221,6 +227,7 @@ Minimum fields for every model output:
 
 - `model`
 - `model_revision`
+- `model_sha256`
 - `backend`
 - `preprocessing`
 - `created_at`

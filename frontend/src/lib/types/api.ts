@@ -10,6 +10,9 @@ export interface AnalysisProfile {
   name: string;
   model_name: string;
   model_version: string;
+  model_revision: string | null;
+  model_sha256: string | null;
+  preprocessing_version: string | null;
   scoring_version: string;
   general_tag_storage_threshold: number;
   character_tag_storage_threshold: number;
@@ -24,6 +27,9 @@ export interface MediaAnalysis {
   status: AnalysisStatus;
   model_name: string;
   model_version: string;
+  model_revision: string | null;
+  model_sha256: string | null;
+  preprocessing_version: string | null;
   scoring_version: string;
   illustration_score: number | null;
   general_tags: Record<string, number>;

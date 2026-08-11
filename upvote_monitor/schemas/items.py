@@ -205,6 +205,9 @@ class MediaAnalysisResponse(BaseModel):
     status: str
     model_name: str
     model_version: str
+    model_revision: str | None
+    model_sha256: str | None
+    preprocessing_version: str | None
     scoring_version: str
     illustration_score: float | None
     general_tags: dict[str, float]
@@ -233,6 +236,9 @@ class MediaAnalysisResponse(BaseModel):
             status=analysis.status.value,
             model_name=analysis.model_name,
             model_version=analysis.model_version,
+            model_revision=analysis.model_revision,
+            model_sha256=analysis.model_sha256,
+            preprocessing_version=analysis.preprocessing_version,
             scoring_version=analysis.scoring_version,
             illustration_score=analysis.illustration_score,
             general_tags=_filter_scores(
