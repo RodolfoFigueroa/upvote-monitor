@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -6,8 +5,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 from pydantic import JsonValue
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session
 
 from upvote_monitor.api.items import reopen_rejected_media
 from upvote_monitor.api.media import (
@@ -42,18 +40,6 @@ def list_media(
         session=session,
         filters=MediaListFilters.model_validate(filters),
     )
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 def make_item(

@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, NotRequired, TypedDict, Unpack
@@ -8,8 +7,7 @@ import pytest
 from fastapi import BackgroundTasks
 from PIL import Image
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
 import upvote_monitor.services.tagging.pixai_tagger as pixai_tagger_module
 from upvote_monitor.api.items import analyze_item_endpoint
@@ -57,18 +55,6 @@ from upvote_monitor.services.tagging.wd_tagger import (
 )
 
 TEST_PROFILE_ID = "fake-wd-default"
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 class FakeTagger:

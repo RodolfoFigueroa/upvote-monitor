@@ -1,5 +1,4 @@
 import logging
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -7,8 +6,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session
 
 from upvote_monitor.api.items import ItemListFilters, list_item_files, list_items
 from upvote_monitor.api.settings import update_settings
@@ -42,18 +40,6 @@ from upvote_monitor.services.secrets import SecretStore, SecretStoreUnavailableE
 from upvote_monitor.services.source_settings import REDDIT_SOURCE, X_SOURCE
 
 ENCRYPTION_KEY = "test-encryption-key"
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 def make_item(
@@ -240,9 +226,8 @@ def test_init_db_reports_new_blank_database_once(
 ) -> None:
     data_dir = tmp_path / "data"
     database_path = data_dir / "upvote_monitor.db"
-    db_engine = create_engine(
+    db_engine = db_engine_module.create_sqlite_engine(
         f"sqlite:///{database_path.as_posix()}",
-        connect_args={"check_same_thread": False},
     )
 
     monkeypatch.setattr(db_engine_module, "DATA_DIR", data_dir)

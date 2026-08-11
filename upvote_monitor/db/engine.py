@@ -1,11 +1,14 @@
+import sqlite3
 from pathlib import Path
+from typing import Final
 
-from sqlalchemy import inspect, text
-from sqlmodel import Session, SQLModel, create_engine, select
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Connection, Engine, event, inspect
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, create_engine, select
 
 from upvote_monitor.db.models import (
-    DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
-    DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD,
     AppSettings,
     RefreshRun,
     ReviewItem,
@@ -19,8 +22,52 @@ from upvote_monitor.services.tagging.profiles import ensure_default_analysis_pro
 
 DATA_DIR = Path("/data")
 DATABASE_URL = f"sqlite:///{(DATA_DIR / 'upvote_monitor.db').as_posix()}"
+SQLITE_BUSY_TIMEOUT_MS: Final = 5000
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+class LegacyDatabaseError(RuntimeError):
+    """Raised when an unversioned alpha database requires a manual reset."""
+
+
+def create_sqlite_engine(
+    database_url: str,
+    *,
+    busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS,
+    in_memory: bool = False,
+) -> Engine:
+    """Create a SQLite engine with the application's required connection policy."""
+    options: dict[str, object] = {
+        "connect_args": {"check_same_thread": False},
+    }
+    if in_memory:
+        options["poolclass"] = StaticPool
+    db_engine = create_engine(database_url, **options)
+
+    @event.listens_for(db_engine, "connect")
+    def _set_sqlite_pragmas(
+        dbapi_connection: sqlite3.Connection,
+        _record: object,
+    ) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            cursor.execute("PRAGMA journal_mode=WAL")
+        finally:
+            cursor.close()
+
+    @event.listens_for(db_engine, "begin")
+    def _defer_foreign_keys(connection: Connection) -> None:
+        # SQLModel models use scalar foreign-key IDs rather than ORM relationships,
+        # so a flush may insert a child before its new parent. Constraints remain
+        # enforced at transaction commit, after both rows have been written.
+        connection.exec_driver_sql("PRAGMA defer_foreign_keys=ON")
+
+    return db_engine
+
+
+engine = create_sqlite_engine(DATABASE_URL)
 
 
 def _has_existing_activity(session: Session) -> bool:
@@ -33,50 +80,33 @@ def _ensure_download_dir(download_base_dir: str) -> None:
     Path(download_base_dir).mkdir(parents=True, exist_ok=True)
 
 
-def _ensure_app_settings_schema() -> None:
-    inspector = inspect(engine)
-    if "app_settings" not in inspector.get_table_names():
-        return
+def run_migrations(db_engine: Engine) -> None:
+    """Upgrade a database using the versioned schema baseline."""
+    config = Config(PROJECT_ROOT / "alembic.ini")
+    config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+    with db_engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
 
-    columns = {column["name"] for column in inspector.get_columns("app_settings")}
-    added_display_threshold = False
-    with engine.begin() as connection:
-        if "general_tag_display_threshold" not in columns:
-            connection.execute(
-                text(
-                    "ALTER TABLE app_settings "
-                    "ADD COLUMN general_tag_display_threshold FLOAT NOT NULL "
-                    f"DEFAULT {DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD}",
-                ),
-            )
-            added_display_threshold = True
-        if "character_tag_display_threshold" not in columns:
-            connection.execute(
-                text(
-                    "ALTER TABLE app_settings "
-                    "ADD COLUMN character_tag_display_threshold FLOAT NOT NULL "
-                    f"DEFAULT {DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD}",
-                ),
-            )
-            added_display_threshold = True
-        if added_display_threshold and "tag_display_threshold" in columns:
-            connection.execute(
-                text(
-                    "UPDATE app_settings "
-                    "SET general_tag_display_threshold = tag_display_threshold, "
-                    "character_tag_display_threshold = tag_display_threshold",
-                ),
-            )
+
+def _database_is_blank(db_engine: Engine) -> bool:
+    tables = set(inspect(db_engine).get_table_names())
+    if tables and "alembic_version" not in tables:
+        database = db_engine.url.database or "the configured SQLite database"
+        msg = (
+            f"Unversioned alpha database found at {database}. "
+            "Upvote Monitor cannot safely upgrade it. Stop the application, move or "
+            "delete that database file, then restart to create a fresh database."
+        )
+        raise LegacyDatabaseError(msg)
+    return not tables
 
 
 def init_db() -> bool:
-    database_path = DATA_DIR / "upvote_monitor.db"
-    created_database = not database_path.exists()
-
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ensure_preview_cache_dir()
-    SQLModel.metadata.create_all(engine)
-    _ensure_app_settings_schema()
+    created_database = _database_is_blank(engine)
+    run_migrations(engine)
 
     with Session(engine) as session:
         settings = session.get(AppSettings, 1)

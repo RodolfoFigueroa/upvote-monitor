@@ -8,8 +8,7 @@ import pytest
 import requests
 from pydantic import JsonValue
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
 from upvote_monitor.db.models import (
     AppSettings,
@@ -48,18 +47,6 @@ if TYPE_CHECKING:
 
 ENCRYPTION_KEY = "test-provider-key"
 AUTH_VALUE = "auth"
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 def test_reddit_child_is_normalized_to_source_item() -> None:

@@ -223,6 +223,9 @@ def ingest_items(
             )
 
             session.add(item)
+            # SQLModel has no ORM relationship here to order dependent inserts.
+            # Persist the parent first now that SQLite foreign keys are enforced.
+            session.flush()
             for attachment in _attachments_from_source_item(
                 source_item,
                 item.id,
