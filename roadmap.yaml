@@ -16,24 +16,40 @@ non_goals:
   - Treat analyses identified only by a mutable Hugging Face main revision as reproducible or comparable with newly generated analyses.
   - Support multiple application workers or a distributed background-job system.
 
+environments:
+  - id: backend
+    provider: uv
+    cwd: .
+    timeout_seconds: 600
+  - id: frontend
+    provider: npm
+    cwd: frontend
+    timeout_seconds: 600
+
 regression_suite:
   - run: uv run ruff format --check .
     cwd: .
+    requires: [backend]
     timeout_seconds: 300
   - run: uv run ruff check .
     cwd: .
+    requires: [backend]
     timeout_seconds: 300
   - run: uv run ty check
     cwd: .
+    requires: [backend]
     timeout_seconds: 300
   - run: uv run pytest --cov=upvote_monitor --cov-report=xml
     cwd: .
+    requires: [backend]
     timeout_seconds: 1800
   - run: npm run check
     cwd: frontend
+    requires: [frontend]
     timeout_seconds: 600
   - run: npm run build
     cwd: frontend
+    requires: [frontend]
     timeout_seconds: 600
 
 steps:
@@ -66,6 +82,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_db_migrations.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 300
 
   - id: workflow-state-machine
@@ -96,6 +113,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_media_workflow.py tests/test_backend_fixes.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 600
 
   - id: durable-job-recovery
@@ -125,6 +143,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_refresh_recovery.py tests/test_download_recovery.py tests/test_backend_fixes.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 600
 
   - id: bounded-query-paths
@@ -156,6 +175,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_query_efficiency.py tests/test_media_workflow.py tests/test_sources_ingest.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 600
 
   - id: reproducible-short-analysis
@@ -189,6 +209,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_tagging_analysis.py tests/test_model_profiles.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 900
 
   - id: atomic-external-io
@@ -217,6 +238,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_download_io.py tests/test_secrets.py tests/test_sources_ingest.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 600
 
   - id: lifecycle-integration-coverage
@@ -245,6 +267,7 @@ steps:
     focused_checks:
       - run: uv run pytest tests/test_app_lifecycle.py tests/test_api_integration.py tests/test_events.py
         cwd: .
+        requires: [backend]
         timeout_seconds: 900
 
 final_acceptance:
