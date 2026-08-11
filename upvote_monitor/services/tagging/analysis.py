@@ -4,8 +4,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NotRequired, Protocol, TypedDict, Unpack
+from typing import NotRequired, Protocol, TypedDict, Unpack, cast
 
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, col, select
 
 from upvote_monitor.db.models import (
@@ -86,6 +87,22 @@ def process_pending_analysis(
         logger.error("No active illustration analysis profile is configured")
         return AnalysisBatchResult()
 
+    auto_approve_threshold = (
+        profile.auto_approve_threshold
+        if settings.illustration_auto_approve_enabled
+        else None
+    )
+    item_ids = [
+        cast("str", item_id)
+        for item_id in session.exec(
+            select(ReviewItem.id).where(
+                ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
+            ),
+        ).all()
+    ]
+    session.expunge(profile)
+    session.commit()
+
     if tagger is None:
         try:
             tagger = _default_tagger(profile)
@@ -94,25 +111,15 @@ def process_pending_analysis(
             return AnalysisBatchResult()
 
     result = AnalysisBatchResult()
-    items = session.exec(
-        select(ReviewItem).where(
-            ReviewItem.approval_status == ApprovalStatus.UNDER_REVIEW,
-        ),
-    ).all()
-
-    for item in items:
+    for item_id in item_ids:
         item_result = _analyze_item(
             session,
-            item,
+            item_id,
             profile,
             tagger,
             AnalyzeItemOptions(
                 force=False,
-                auto_approve_threshold=(
-                    profile.auto_approve_threshold
-                    if settings.illustration_auto_approve_enabled
-                    else None
-                ),
+                auto_approve_threshold=auto_approve_threshold,
             ),
         )
         result.analyzed += item_result.analyzed
@@ -120,7 +127,6 @@ def process_pending_analysis(
         result.failed += item_result.failed
         result.approved += item_result.approved
 
-    session.commit()
     return result
 
 
@@ -134,18 +140,20 @@ def analyze_item(
         msg = "No active illustration analysis profile is configured"
         raise TaggerUnavailableError(msg)
 
+    item_id = item.id
+    session.expunge(profile)
+    session.commit()
+
     if tagger is None:
         tagger = _default_tagger(profile)
 
-    result = _analyze_item(
+    return _analyze_item(
         session,
-        item,
+        item_id,
         profile,
         tagger,
         AnalyzeItemOptions(force=True, auto_approve_threshold=None),
     )
-    session.commit()
-    return result
 
 
 def analyze_attachment(
@@ -158,25 +166,31 @@ def analyze_attachment(
         msg = "No active illustration analysis profile is configured"
         raise TaggerUnavailableError(msg)
 
+    attachment_id = attachment.id
+    if attachment_id is None:
+        msg = "Media attachment must be persisted before analysis"
+        raise ValueError(msg)
     item = session.get(ReviewItem, attachment.item_id)
     if item is None:
         msg = "Media item source post could not be found"
         raise TaggerUnavailableError(msg)
 
+    session.expunge(profile)
+    session.commit()
+
     if tagger is None:
         tagger = _default_tagger(profile)
-
-    existing = (
-        _existing_analysis(session, attachment.id, profile) if attachment.id else None
+    _analyze_one(
+        session,
+        attachment_id,
+        profile,
+        tagger,
+        AnalyzeItemOptions(force=True, auto_approve_threshold=None),
     )
-    analysis = _analyze_attachment(item, attachment, profile, tagger)
-    if existing is not None:
-        _replace_analysis(existing, analysis)
-        analysis = existing
-    else:
-        session.add(analysis)
-
-    session.commit()
+    analysis = _existing_analysis(session, attachment_id, profile)
+    if analysis is None:
+        msg = "Media attachment was removed during analysis"
+        raise TaggerUnavailableError(msg)
     return analysis
 
 
@@ -210,6 +224,27 @@ def get_attachment_analyses(
             .order_by(col(MediaAnalysis.analyzed_at).desc()),
         ).all(),
     )
+
+
+def get_analyses_for_attachments(
+    session: Session,
+    attachment_ids: list[int],
+) -> dict[int, list[MediaAnalysis]]:
+    """Load complete analysis history for a bounded attachment page."""
+    if not attachment_ids:
+        return {}
+    rows = session.exec(
+        select(MediaAnalysis)
+        .where(col(MediaAnalysis.attachment_id).in_(attachment_ids))
+        .order_by(
+            col(MediaAnalysis.attachment_id),
+            col(MediaAnalysis.analyzed_at).desc(),
+        ),
+    ).all()
+    result: dict[int, list[MediaAnalysis]] = {}
+    for row in rows:
+        result.setdefault(row.attachment_id, []).append(row)
+    return result
 
 
 def get_item_analysis_summary(
@@ -273,55 +308,101 @@ def _image_attachments_for_item(
 
 def _analyze_item(
     session: Session,
-    item: ReviewItem,
+    item_id: str,
     profile: AnalysisProfile,
     tagger: ImageTagger,
     options: AnalyzeItemOptions,
 ) -> AnalysisBatchResult:
     result = AnalysisBatchResult()
-    attachments = _image_attachments_for_item(session, item.id)
+    attachment_ids = [
+        attachment.id
+        for attachment in _image_attachments_for_item(session, item_id)
+        if attachment.id is not None
+    ]
+    session.commit()
 
-    for attachment in attachments:
-        if attachment.id is None:
-            continue
-        existing = _existing_analysis(session, attachment.id, profile)
-        if existing is not None and not options.force:
-            if _maybe_auto_approve_attachment(
-                session,
-                attachment,
-                existing.illustration_score,
-                options.auto_approve_threshold,
-            ):
-                result.approved += 1
-            continue
-
-        analysis = _analyze_attachment(
-            item,
-            attachment,
+    for attachment_id in attachment_ids:
+        attachment_result = _analyze_one(
+            session,
+            attachment_id,
             profile,
             tagger,
+            options,
         )
-        if existing is not None:
-            _replace_analysis(existing, analysis)
-            analysis = existing
-        else:
-            session.add(analysis)
-
-        if analysis.status == AnalysisStatus.COMPLETED:
-            result.analyzed += 1
-            if _maybe_auto_approve_attachment(
-                session,
-                attachment,
-                analysis.illustration_score,
-                options.auto_approve_threshold,
-            ):
-                result.approved += 1
-        elif analysis.status == AnalysisStatus.SKIPPED:
-            result.skipped += 1
-        elif analysis.status == AnalysisStatus.FAILED:
-            result.failed += 1
+        result.analyzed += attachment_result.analyzed
+        result.skipped += attachment_result.skipped
+        result.failed += attachment_result.failed
+        result.approved += attachment_result.approved
 
     return result
+
+
+def _analyze_one(
+    session: Session,
+    attachment_id: int,
+    profile: AnalysisProfile,
+    tagger: ImageTagger,
+    options: AnalyzeItemOptions,
+) -> AnalysisBatchResult:
+    """Run one attachment as read, compute, and fresh atomic write phases."""
+    attachment = session.get(MediaAttachment, attachment_id)
+    if attachment is None:
+        session.commit()
+        return AnalysisBatchResult(skipped=1)
+    item_id = attachment.item_id
+
+    existing = _existing_analysis(session, attachment_id, profile)
+    if existing is not None and not options.force:
+        score = existing.illustration_score
+        session.commit()
+        session.expire_all()
+        fresh_attachment = session.get(MediaAttachment, attachment_id)
+        approved = bool(
+            fresh_attachment is not None
+            and _maybe_auto_approve_attachment(
+                session,
+                fresh_attachment,
+                score,
+                options.auto_approve_threshold,
+            )
+        )
+        session.commit()
+        return AnalysisBatchResult(approved=int(approved))
+
+    session.expunge(attachment)
+    session.commit()
+    analysis = _analyze_attachment(item_id, attachment, profile, tagger)
+
+    # The read transaction is closed before preview I/O and inference above. Start a
+    # new short transaction and re-read decision state before writing anything.
+    session.expire_all()
+    fresh_attachment = session.get(MediaAttachment, attachment_id)
+    fresh_item = session.get(ReviewItem, item_id)
+    if fresh_attachment is None or fresh_item is None:
+        session.commit()
+        return AnalysisBatchResult(skipped=1)
+
+    concurrent = _existing_analysis(session, attachment_id, profile)
+    if concurrent is not None and existing is None and not options.force:
+        session.commit()
+        return AnalysisBatchResult()
+
+    _upsert_analysis(session, analysis)
+    approved = False
+    if analysis.status == AnalysisStatus.COMPLETED:
+        approved = _maybe_auto_approve_attachment(
+            session,
+            fresh_attachment,
+            analysis.illustration_score,
+            options.auto_approve_threshold,
+        )
+    session.commit()
+    return AnalysisBatchResult(
+        analyzed=int(analysis.status == AnalysisStatus.COMPLETED),
+        skipped=int(analysis.status == AnalysisStatus.SKIPPED),
+        failed=int(analysis.status == AnalysisStatus.FAILED),
+        approved=int(approved),
+    )
 
 
 def _existing_analysis(
@@ -337,7 +418,7 @@ def _existing_analysis(
 
 
 def _analyze_attachment(
-    item: ReviewItem,
+    item_id: str,
     attachment: MediaAttachment,
     profile: AnalysisProfile,
     tagger: ImageTagger,
@@ -357,7 +438,7 @@ def _analyze_attachment(
 
     try:
         image_path = get_or_fetch_cached_preview(
-            item.id,
+            item_id,
             attachment.sort_index,
             preview_url,
         )
@@ -408,6 +489,9 @@ def _analysis_result(
         analysis_profile_id=profile.id,
         model_name=profile.model_name,
         model_version=profile.model_version,
+        model_revision=profile.model_revision,
+        model_sha256=profile.model_sha256,
+        preprocessing_version=profile.preprocessing_version,
         scoring_version=profile.scoring_version,
         status=status,
         illustration_score=options.get("illustration_score"),
@@ -419,18 +503,18 @@ def _analysis_result(
     )
 
 
-def _replace_analysis(target: MediaAnalysis, source: MediaAnalysis) -> None:
-    target.analysis_profile_id = source.analysis_profile_id
-    target.model_name = source.model_name
-    target.model_version = source.model_version
-    target.scoring_version = source.scoring_version
-    target.status = source.status
-    target.illustration_score = source.illustration_score
-    target.general_tags_json = source.general_tags_json
-    target.character_tags_json = source.character_tags_json
-    target.ratings_json = source.ratings_json
-    target.error = source.error
-    target.analyzed_at = source.analyzed_at
+def _upsert_analysis(session: Session, analysis: MediaAnalysis) -> None:
+    values = analysis.model_dump(exclude={"id"})
+    statement = sqlite_insert(MediaAnalysis).values(**values)
+    statement = statement.on_conflict_do_update(
+        index_elements=["attachment_id", "analysis_profile_id"],
+        set_={
+            key: value
+            for key, value in values.items()
+            if key not in {"attachment_id", "analysis_profile_id"}
+        },
+    )
+    session.exec(statement)
 
 
 def _filter_scores(

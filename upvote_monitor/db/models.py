@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Column, Text, UniqueConstraint
+from sqlalchemy import Column, Index, Text, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 from upvote_monitor.enums import (
@@ -16,7 +16,7 @@ from upvote_monitor.enums import (
     RuleTargetType,
 )
 
-DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-default"
+DEFAULT_ANALYSIS_PROFILE_ID = "wd-swinv2-v3-627aef95"
 DEFAULT_GENERAL_TAG_DISPLAY_THRESHOLD = 0.15
 DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD = 0.35
 
@@ -29,6 +29,39 @@ class ReviewItem(SQLModel, table=True):
     __tablename__ = "review_items"
     __table_args__ = (
         UniqueConstraint("source", "source_item_id", name="uq_review_item_source_item"),
+        Index(
+            "ix_review_items_list",
+            "approval_status",
+            "download_status",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_review_items_download_claim",
+            "approval_status",
+            "download_status",
+            "download_ready_at",
+            "id",
+        ),
+        Index("ix_review_items_created_cursor", "created_at", "id"),
+        Index("ix_review_items_source_created", "source", "created_at", "id"),
+        Index(
+            "ix_review_items_community_created",
+            "community_name",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_review_items_author_created",
+            "author_name",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_review_items_download_recovery",
+            "download_status",
+            "download_heartbeat_at",
+        ),
     )
 
     id: str = Field(primary_key=True)
@@ -51,6 +84,9 @@ class ReviewItem(SQLModel, table=True):
     discovered_at: datetime = Field(default_factory=utc_now)
     downloaded_at: datetime | None = None
     download_dir: str | None = None
+    download_claim_token: str | None = Field(default=None, index=True)
+    download_claimed_at: datetime | None = None
+    download_heartbeat_at: datetime | None = Field(default=None, index=True)
 
 
 class MediaAttachment(SQLModel, table=True):
@@ -60,6 +96,21 @@ class MediaAttachment(SQLModel, table=True):
             "item_id",
             "sort_index",
             name="uq_media_attachment_item_sort",
+        ),
+        Index("ix_media_attachments_item_order", "item_id", "sort_index", "id"),
+        Index(
+            "ix_media_attachments_approval_item_order",
+            "approval_status",
+            "item_id",
+            "sort_index",
+            "id",
+        ),
+        Index(
+            "ix_media_attachments_label_item_order",
+            "illustration_label",
+            "item_id",
+            "sort_index",
+            "id",
         ),
     )
 
@@ -93,6 +144,9 @@ class AnalysisProfile(SQLModel, table=True):
     name: str
     model_name: str = Field(index=True)
     model_version: str = Field(default="main", index=True)
+    model_revision: str | None = Field(default=None, index=True)
+    model_sha256: str | None = None
+    preprocessing_version: str | None = None
     scoring_version: str = Field(default="illustration-v1", index=True)
     general_tag_storage_threshold: float = Field(default=0.01)
     character_tag_storage_threshold: float = Field(default=0.01)
@@ -110,6 +164,11 @@ class MediaAnalysis(SQLModel, table=True):
             "analysis_profile_id",
             name="uq_media_analysis_attachment_profile",
         ),
+        Index(
+            "ix_media_analyses_attachment_analyzed",
+            "attachment_id",
+            "analyzed_at",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -117,6 +176,9 @@ class MediaAnalysis(SQLModel, table=True):
     analysis_profile_id: str = Field(foreign_key="analysis_profiles.id", index=True)
     model_name: str = Field(index=True)
     model_version: str = Field(default="main", index=True)
+    model_revision: str | None = Field(default=None, index=True)
+    model_sha256: str | None = None
+    preprocessing_version: str | None = None
     scoring_version: str = Field(default="illustration-v1", index=True)
     status: AnalysisStatus = Field(default=AnalysisStatus.COMPLETED, index=True)
     illustration_score: float | None = Field(default=None, index=True)
@@ -179,6 +241,15 @@ class SourceRule(SQLModel, table=True):
 
 class RefreshRun(SQLModel, table=True):
     __tablename__ = "refresh_runs"
+    __table_args__ = (
+        Index("ix_refresh_runs_active", "status", "heartbeat_at", "started_at"),
+        Index(
+            "uq_refresh_runs_one_active",
+            text("1"),
+            unique=True,
+            sqlite_where=text("status IN ('QUEUED', 'RUNNING')"),
+        ),
+    )
 
     id: str = Field(primary_key=True, default_factory=lambda: str(uuid4()))
     status: RefreshRunStatus = Field(default=RefreshRunStatus.QUEUED)
@@ -189,3 +260,6 @@ class RefreshRun(SQLModel, table=True):
     downloads_triggered: int = Field(default=0)
     downloads_failed: int = Field(default=0)
     error: str | None = None
+    claim_token: str | None = Field(default=None, index=True)
+    claimed_at: datetime | None = None
+    heartbeat_at: datetime | None = Field(default=None, index=True)

@@ -1,5 +1,4 @@
 import logging
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -7,10 +6,14 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session
 
-from upvote_monitor.api.items import ItemListFilters, list_item_files, list_items
+from upvote_monitor.api.items import (
+    ItemListFilters,
+    get_item_media,
+    list_item_files,
+    list_items,
+)
 from upvote_monitor.api.settings import update_settings
 from upvote_monitor.db import engine as db_engine_module
 from upvote_monitor.db.models import (
@@ -42,18 +45,6 @@ from upvote_monitor.services.secrets import SecretStore, SecretStoreUnavailableE
 from upvote_monitor.services.source_settings import REDDIT_SOURCE, X_SOURCE
 
 ENCRYPTION_KEY = "test-encryption-key"
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 def make_item(
@@ -240,9 +231,8 @@ def test_init_db_reports_new_blank_database_once(
 ) -> None:
     data_dir = tmp_path / "data"
     database_path = data_dir / "upvote_monitor.db"
-    db_engine = create_engine(
+    db_engine = db_engine_module.create_sqlite_engine(
         f"sqlite:///{database_path.as_posix()}",
-        connect_args={"check_same_thread": False},
     )
 
     monkeypatch.setattr(db_engine_module, "DATA_DIR", data_dir)
@@ -284,7 +274,13 @@ def test_file_listing_returns_safe_file_metadata(
     (tmp_path / "clip 01.mp4").write_bytes(b"video")
 
     with Session(engine) as session:
-        session.add(make_item("media-item", download_dir=str(tmp_path)))
+        session.add(
+            make_item(
+                "media-item",
+                download_status=DownloadStatus.COMPLETED,
+                download_dir=str(tmp_path),
+            ),
+        )
         session.commit()
 
         response = list_item_files("media-item", session)
@@ -298,6 +294,42 @@ def test_file_listing_returns_safe_file_metadata(
     assert response.files[0].media_type == "image/jpeg"
     assert response.files[1].media_type == "video/mp4"
     assert str(tmp_path) not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("approval_status", "download_status"),
+    [
+        (ApprovalStatus.REJECTED, DownloadStatus.COMPLETED),
+        (ApprovalStatus.APPROVED, DownloadStatus.PENDING),
+        (ApprovalStatus.APPROVED, DownloadStatus.IN_PROGRESS),
+    ],
+)
+def test_archived_files_require_approved_completed_state(
+    engine: Engine,
+    tmp_path: Path,
+    approval_status: ApprovalStatus,
+    download_status: DownloadStatus,
+) -> None:
+    (tmp_path / "00.jpg").write_bytes(b"image")
+    with Session(engine) as session:
+        session.add(
+            make_item(
+                f"guard-{approval_status.value}-{download_status.value}",
+                approval_status=approval_status,
+                download_status=download_status,
+                download_dir=str(tmp_path),
+            ),
+        )
+        session.commit()
+        item_id = f"guard-{approval_status.value}-{download_status.value}"
+
+        with pytest.raises(HTTPException) as list_error:
+            list_item_files(item_id, session)
+        with pytest.raises(HTTPException) as serve_error:
+            get_item_media(item_id, "00.jpg", session)
+
+    assert list_error.value.status_code == 404
+    assert serve_error.value.status_code == 404
 
 
 def test_item_list_filters_multiple_sources(engine: Engine) -> None:

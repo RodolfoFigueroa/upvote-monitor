@@ -150,6 +150,9 @@ class AnalysisProfileResponse(BaseModel):
     name: str
     model_name: str
     model_version: str
+    model_revision: str | None
+    model_sha256: str | None
+    preprocessing_version: str | None
     scoring_version: str
     general_tag_storage_threshold: float
     character_tag_storage_threshold: float
@@ -165,6 +168,9 @@ class AnalysisProfileResponse(BaseModel):
             name=profile.name,
             model_name=profile.model_name,
             model_version=profile.model_version,
+            model_revision=profile.model_revision,
+            model_sha256=profile.model_sha256,
+            preprocessing_version=profile.preprocessing_version,
             scoring_version=profile.scoring_version,
             general_tag_storage_threshold=profile.general_tag_storage_threshold,
             character_tag_storage_threshold=profile.character_tag_storage_threshold,

@@ -14,7 +14,7 @@ class _EventBusState:
 _state = _EventBusState()
 
 
-def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+def set_event_loop(loop: asyncio.AbstractEventLoop | None) -> None:
     _state.loop = loop
 
 
@@ -26,6 +26,11 @@ def subscribe() -> asyncio.Queue[tuple[str, dict[str, Any]]]:
 
 def unsubscribe(queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
     _subscribers.discard(queue)
+
+
+def subscriber_count() -> int:
+    """Return the active subscription count for lifecycle diagnostics."""
+    return len(_subscribers)
 
 
 def _deliver(event: str, data: dict[str, Any]) -> None:

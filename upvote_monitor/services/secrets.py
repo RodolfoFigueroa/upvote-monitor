@@ -1,8 +1,11 @@
 import base64
 import json
+import os
+import tempfile
 from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -13,6 +16,14 @@ DEFAULT_SECRET_PATH = Path("/data/secrets.enc")
 SECRET_SUFFIX_LENGTH = 4
 SECRET_PREVIEW_LENGTH = 4
 _DEFAULT_SECRET_KEY = object()
+_PATH_LOCKS_GUARD = Lock()
+_PATH_LOCKS: dict[Path, RLock] = {}
+
+
+def _path_lock(path: Path) -> RLock:
+    resolved_path = path.resolve()
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(resolved_path, RLock())
 
 
 class SecretStoreUnavailableError(RuntimeError):
@@ -83,24 +94,25 @@ class SecretStore:
         source: str,
         updates: Mapping[str, str | None],
     ) -> None:
-        data = self.read_all()
-        source_secrets = data.get(source)
-        if not isinstance(source_secrets, dict):
-            source_secrets = {}
+        with _path_lock(self.path):
+            data = self.read_all()
+            source_secrets = data.get(source)
+            if not isinstance(source_secrets, dict):
+                source_secrets = {}
 
-        for key, value in updates.items():
-            if value is None:
-                continue
-            if value == "":
-                source_secrets.pop(key, None)
+            for key, value in updates.items():
+                if value is None:
+                    continue
+                if value == "":
+                    source_secrets.pop(key, None)
+                else:
+                    source_secrets[key] = value
+
+            if source_secrets:
+                data[source] = source_secrets
             else:
-                source_secrets[key] = value
-
-        if source_secrets:
-            data[source] = source_secrets
-        else:
-            data.pop(source, None)
-        self.write_all(data)
+                data.pop(source, None)
+            self.write_all(data)
 
     def read_all(self) -> dict[str, Any]:
         fernet = self._fernet()
@@ -124,7 +136,24 @@ class SecretStore:
         fernet = self._fernet()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         plaintext = json.dumps(data, sort_keys=True).encode("utf-8")
-        self.path.write_bytes(fernet.encrypt(plaintext))
+        encrypted = fernet.encrypt(plaintext)
+        temporary_path: Path | None = None
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+                dir=self.path.parent,
+            )
+            temporary_path = Path(temporary_name)
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(encrypted)
+                file.flush()
+                os.fsync(file.fileno())
+            temporary_path.replace(self.path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def _fernet(self) -> Fernet:
         if not self._secret_key:

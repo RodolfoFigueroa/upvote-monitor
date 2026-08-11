@@ -9,11 +9,12 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import MediaAnalysisPanel from '$lib/components/MediaAnalysisPanel.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
-  import { api } from '$lib/api/client';
+  import { api, ApiError } from '$lib/api/client';
   import { communityLabel, formatDate, isVideoUrl } from '$lib/format';
   import { subscribeItemUpdated } from '$lib/sse/store.svelte';
   import type {
     DownloadStatus,
+    IllustrationLabel,
     ItemDetail,
     ItemFile,
     MediaAttachment,
@@ -29,6 +30,15 @@
 
   const itemId = $derived($page.params.id ?? '');
   const terminalDownloadStatuses = new Set<DownloadStatus>(['completed', 'failed']);
+  const labelOptions: { value: IllustrationLabel; label: string }[] = [
+    { value: 'yes', label: 'Yes' },
+    { value: 'no', label: 'No' },
+    { value: 'unsure', label: 'Unsure' },
+    { value: 'unlabeled', label: 'Unlabeled' },
+  ];
+  const canChangeApproval = $derived(
+    item?.download_status === 'pending' || item?.download_status === 'failed'
+  );
   const canRetry = $derived(
     item?.approval_status === 'approved' &&
       (item.download_status === 'failed' || item.download_status === 'pending')
@@ -143,6 +153,9 @@
       await load({ quiet: true });
     } catch (e) {
       errorMessage = e instanceof Error ? e.message : 'Reopen failed';
+      if (e instanceof ApiError && e.status === 409) {
+        await load({ quiet: true });
+      }
     } finally {
       const { [media.id]: _, ...rest } = mediaActions;
       mediaActions = rest;
@@ -157,8 +170,25 @@
       files = [];
     } catch (e) {
       errorMessage = e instanceof Error ? e.message : 'Reopen failed';
+      if (e instanceof ApiError && e.status === 409) {
+        await load({ quiet: true });
+      }
     } finally {
       actionLoading = false;
+    }
+  }
+
+  async function labelMedia(media: MediaAttachment, label: IllustrationLabel) {
+    mediaActions = { ...mediaActions, [media.id]: 'labeling' };
+    errorMessage = null;
+    try {
+      await api.media.update(media.id, { illustration_label: label });
+      await load({ quiet: true });
+    } catch (e) {
+      errorMessage = e instanceof Error ? e.message : 'Label update failed';
+    } finally {
+      const { [media.id]: _, ...rest } = mediaActions;
+      mediaActions = rest;
     }
   }
 
@@ -249,7 +279,7 @@
       </div>
     </dl>
     <div class="actions-row settings-actions">
-      {#if rejectedMediaCount > 0}
+      {#if rejectedMediaCount > 0 && canChangeApproval}
         <button class="button" onclick={reopenRejectedItemMedia} disabled={actionLoading}>
           <RotateCcw size={16} />
           Reopen rejected
@@ -308,7 +338,7 @@
               <span class="chip">score {scorePercent(media.analysis?.illustration_score)}</span>
             </div>
             <div class="actions-row">
-              {#if media.approval_status === 'rejected'}
+              {#if media.approval_status === 'rejected' && canChangeApproval}
                 <button
                   class="button"
                   disabled={mediaBusy(media.id)}
@@ -318,7 +348,7 @@
                   Reopen
                 </button>
               {/if}
-              {#if media.approval_status === 'under_review'}
+              {#if media.approval_status === 'under_review' && canChangeApproval}
                 <a class="button" data-tone="quiet" href={reviewMediaHref(media)}>
                   Review
                 </a>
@@ -332,6 +362,22 @@
                 <Tags size={16} />
                 {mediaActions[media.id] === 'tagging' ? 'Tagging' : 'Tag'}
               </button>
+            </div>
+            <div class="triage-section">
+              <strong>Illustration label</strong>
+              <div class="segmented-control">
+                {#each labelOptions as option}
+                  <button
+                    class="button"
+                    data-tone={media.illustration_label === option.value ? 'primary' : 'quiet'}
+                    aria-pressed={media.illustration_label === option.value}
+                    disabled={mediaBusy(media.id)}
+                    onclick={() => labelMedia(media, option.value)}
+                  >
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
             </div>
             <MediaAnalysisPanel analysis={media.analysis} analyses={media.analyses} />
             <div class="detail-grid" style="padding: 0; grid-template-columns: 1fr;">

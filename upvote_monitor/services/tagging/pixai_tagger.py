@@ -16,6 +16,7 @@ from upvote_monitor.services.tagging.wd_tagger import WDTaggerResult
 PIXAI_TAGGER_V0_9_ONNX_REPO_ID = "deepghs/pixai-tagger-v0.9-onnx"
 PIXAI_COMPATIBLE_MODEL_REPOS = (PIXAI_TAGGER_V0_9_ONNX_REPO_ID,)
 DEFAULT_MODEL_REPO_ID = PIXAI_TAGGER_V0_9_ONNX_REPO_ID
+DEFAULT_MODEL_REVISION = "d8cf666911a2c3d10d586d7823259192313c7eb7"
 MODEL_FILENAME = "model.onnx"
 TAGS_FILENAME = "selected_tags.csv"
 PREPROCESS_FILENAME = "preprocess.json"
@@ -43,7 +44,7 @@ class PixAITagger:
         self,
         *,
         repo_id: str = DEFAULT_MODEL_REPO_ID,
-        revision: str = "main",
+        revision: str = DEFAULT_MODEL_REVISION,
         cache_dir: Path = MODEL_CACHE_DIR,
     ) -> None:
         self.repo_id = repo_id
@@ -123,7 +124,7 @@ class PixAITagger:
 @lru_cache(maxsize=2)
 def get_pixai_tagger(
     repo_id: str = DEFAULT_MODEL_REPO_ID,
-    revision: str = "main",
+    revision: str = DEFAULT_MODEL_REVISION,
 ) -> PixAITagger:
     return PixAITagger(repo_id=repo_id, revision=revision)
 

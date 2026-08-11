@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, and_, desc, func, or_
+from sqlalchemy import ColumnElement, and_, desc, or_
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import Select
 
@@ -21,11 +21,12 @@ from upvote_monitor.schemas.items import (
     MediaItemResponse,
     MediaListResponse,
     MediaUpdate,
+    ResponseProjection,
 )
 from upvote_monitor.services.approval import normalize_rule_target
 from upvote_monitor.services.download import run_download_background
 from upvote_monitor.services.media_workflow import (
-    ReopenMediaConflictError,
+    ApprovalTransitionConflictError,
     reopen_media_for_review,
     set_media_decision,
 )
@@ -56,7 +57,6 @@ class MediaListFilters(BaseModel):
     community: str | None = None
     author: str | None = None
     limit: int = Field(default=50, ge=1, le=120)
-    offset: int = Field(default=0, ge=0)
     cursor: str | None = None
 
 
@@ -188,43 +188,28 @@ def list_media(
         ReviewItem,
         col(ReviewItem.id) == col(MediaAttachment.item_id),
     )
-    count_query = (
-        select(func.count())
-        .select_from(MediaAttachment)
-        .join(
-            ReviewItem,
-            col(ReviewItem.id) == col(MediaAttachment.item_id),
-        )
-    )
-
     media_status = _parse_approval_status(filters.approval_status)
     if media_status is not None:
         query = query.where(MediaAttachment.approval_status == media_status)
-        count_query = count_query.where(MediaAttachment.approval_status == media_status)
 
     label = _parse_illustration_label(filters.illustration_label)
     if label is not None:
         query = query.where(MediaAttachment.illustration_label == label)
-        count_query = count_query.where(MediaAttachment.illustration_label == label)
 
     if filters.item_id is not None:
         query = query.where(MediaAttachment.item_id == filters.item_id)
-        count_query = count_query.where(MediaAttachment.item_id == filters.item_id)
 
     if filters.media_id is not None:
         query = query.where(MediaAttachment.id == filters.media_id)
-        count_query = count_query.where(MediaAttachment.id == filters.media_id)
 
     dl_status = _parse_download_status(filters.download_status)
     if dl_status is not None:
         query = query.where(ReviewItem.download_status == dl_status)
-        count_query = count_query.where(ReviewItem.download_status == dl_status)
 
     sources = _normalized_sources(filters)
     if sources:
         source_filter = col(ReviewItem.source).in_(sources)
         query = query.where(source_filter)
-        count_query = count_query.where(source_filter)
 
     normalization_source = _normalization_source(sources)
     if filters.community is not None:
@@ -234,7 +219,6 @@ def list_media(
             filters.community,
         )
         query = query.where(ReviewItem.community_name == normalized)
-        count_query = count_query.where(ReviewItem.community_name == normalized)
 
     if filters.author is not None:
         normalized = normalize_rule_target(
@@ -243,7 +227,6 @@ def list_media(
             filters.author,
         )
         query = query.where(ReviewItem.author_name == normalized)
-        count_query = count_query.where(ReviewItem.author_name == normalized)
 
     query = _with_cursor(query, filters.cursor)
 
@@ -254,8 +237,6 @@ def list_media(
         col(MediaAttachment.id),
     )
 
-    if filters.cursor is None:
-        query = query.offset(filters.offset)
     query = query.limit(filters.limit + 1)
 
     rows = session.exec(query).all()
@@ -265,15 +246,17 @@ def list_media(
         if len(rows) > filters.limit and returned_rows
         else None
     )
-    total = session.exec(count_query).one()
+    projection = ResponseProjection.load(
+        session,
+        list({item.id for _, item in returned_rows}),
+        attachments=[attachment for attachment, _ in returned_rows],
+    )
     return MediaListResponse(
         media=[
-            MediaItemResponse.from_db(attachment, item, session)
+            MediaItemResponse.from_db(attachment, item, session, projection)
             for attachment, item in returned_rows
         ],
-        total=total,
         limit=filters.limit,
-        offset=filters.offset,
         next_cursor=next_cursor,
     )
 
@@ -304,12 +287,15 @@ def update_media(
         )
     changed_approval = approval_status is not None
 
-    updated_item = set_media_decision(
-        session,
-        attachment,
-        approval_status=approval_status,
-        illustration_label=illustration_label,
-    )
+    try:
+        updated_item = set_media_decision(
+            session,
+            attachment,
+            approval_status=approval_status,
+            illustration_label=illustration_label,
+        )
+    except ApprovalTransitionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
 
     session.refresh(attachment)
@@ -339,7 +325,7 @@ def reopen_media(
     attachment, item = _get_media_or_404(session, media_id)
     try:
         updated_item = reopen_media_for_review(session, attachment)
-    except ReopenMediaConflictError as exc:
+    except ApprovalTransitionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     session.commit()

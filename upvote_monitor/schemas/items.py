@@ -1,8 +1,10 @@
 import json
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import BaseModel, Field
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from upvote_monitor.db.models import (
     DEFAULT_CHARACTER_TAG_DISPLAY_THRESHOLD,
@@ -12,24 +14,115 @@ from upvote_monitor.db.models import (
     MediaAttachment,
     ReviewItem,
 )
-from upvote_monitor.services.download import (
-    get_media_attachments,
-    get_preview_urls,
-    get_source_urls,
-)
+from upvote_monitor.enums import AnalysisStatus, ApprovalStatus, IllustrationLabel
 from upvote_monitor.services.media_workflow import (
+    MediaDecisionCounts,
     approval_status_api,
-    attachment_counts,
 )
 from upvote_monitor.services.preview_cache import (
     localize_preview_url,
     localize_preview_urls,
 )
 from upvote_monitor.services.tagging.analysis import (
-    get_attachment_analyses,
-    get_attachment_analysis,
-    get_item_analysis_summary,
+    ItemAnalysisSummary,
+    get_analyses_for_attachments,
 )
+from upvote_monitor.services.tagging.profiles import active_analysis_profile
+
+
+@dataclass(frozen=True)
+class ResponseProjection:
+    attachments_by_item: dict[str, list[MediaAttachment]]
+    analyses_by_attachment: dict[int, list[MediaAnalysis]]
+    active_profile_id: str | None
+    general_threshold: float
+    character_threshold: float
+
+    @classmethod
+    def load(
+        cls,
+        session: Session,
+        item_ids: list[str],
+        *,
+        attachments: list[MediaAttachment] | None = None,
+    ) -> "ResponseProjection":
+        if attachments is None:
+            attachments = (
+                list(
+                    session.exec(
+                        select(MediaAttachment)
+                        .where(col(MediaAttachment.item_id).in_(item_ids))
+                        .order_by(
+                            col(MediaAttachment.item_id),
+                            col(MediaAttachment.sort_index),
+                        ),
+                    ).all(),
+                )
+                if item_ids
+                else []
+            )
+        grouped: defaultdict[str, list[MediaAttachment]] = defaultdict(list)
+        attachment_ids: list[int] = []
+        for attachment in attachments:
+            grouped[attachment.item_id].append(attachment)
+            if attachment.id is not None:
+                attachment_ids.append(attachment.id)
+
+        profile = active_analysis_profile(session)
+        general_threshold, character_threshold = _tag_display_thresholds(session)
+        return cls(
+            attachments_by_item=dict(grouped),
+            analyses_by_attachment=get_analyses_for_attachments(
+                session,
+                attachment_ids,
+            ),
+            active_profile_id=profile.id if profile is not None else None,
+            general_threshold=general_threshold,
+            character_threshold=character_threshold,
+        )
+
+    def analyses_for(self, attachment_id: int) -> list[MediaAnalysis]:
+        return self.analyses_by_attachment.get(attachment_id, [])
+
+    def active_analysis_for(self, attachment_id: int) -> MediaAnalysis | None:
+        if self.active_profile_id is None:
+            return None
+        return next(
+            (
+                analysis
+                for analysis in self.analyses_for(attachment_id)
+                if analysis.analysis_profile_id == self.active_profile_id
+            ),
+            None,
+        )
+
+    def item_analysis_summary(self, item_id: str) -> ItemAnalysisSummary:
+        if self.active_profile_id is None:
+            return ItemAnalysisSummary(status=None, illustration_score=None)
+        rows = [
+            analysis
+            for attachment in self.attachments_by_item.get(item_id, [])
+            if attachment.id is not None
+            for analysis in self.analyses_for(attachment.id)
+            if analysis.analysis_profile_id == self.active_profile_id
+        ]
+        scores = [
+            row.illustration_score
+            for row in rows
+            if row.status == AnalysisStatus.COMPLETED
+            and row.illustration_score is not None
+        ]
+        if scores:
+            return ItemAnalysisSummary(
+                status=AnalysisStatus.COMPLETED.value,
+                illustration_score=max(scores),
+            )
+        statuses = {row.status for row in rows}
+        if AnalysisStatus.FAILED in statuses:
+            return ItemAnalysisSummary(AnalysisStatus.FAILED.value, None)
+        if AnalysisStatus.SKIPPED in statuses:
+            return ItemAnalysisSummary(AnalysisStatus.SKIPPED.value, None)
+        return ItemAnalysisSummary(status=None, illustration_score=None)
 
 
 def _persisted_attachment_id(attachment: MediaAttachment) -> int:
@@ -62,8 +155,14 @@ class MediaAttachmentResponse(BaseModel):
         cls,
         attachment: MediaAttachment,
         session: Session,
+        projection: ResponseProjection | None = None,
     ) -> "MediaAttachmentResponse":
         attachment_id = _persisted_attachment_id(attachment)
+        projection = projection or ResponseProjection.load(
+            session,
+            [attachment.item_id],
+            attachments=[attachment],
+        )
         return cls(
             id=attachment_id,
             item_id=attachment.item_id,
@@ -80,12 +179,23 @@ class MediaAttachmentResponse(BaseModel):
             approval_status=approval_status_api(attachment.approval_status),
             illustration_label=attachment.illustration_label.value,
             analysis=MediaAnalysisResponse.from_db(
-                get_attachment_analysis(session, attachment_id),
+                projection.active_analysis_for(attachment_id),
                 session,
+                thresholds=(
+                    projection.general_threshold,
+                    projection.character_threshold,
+                ),
             ),
             analyses=[
-                MediaAnalysisResponse.from_analysis(analysis, session)
-                for analysis in get_attachment_analyses(session, attachment_id)
+                MediaAnalysisResponse.from_analysis(
+                    analysis,
+                    session,
+                    thresholds=(
+                        projection.general_threshold,
+                        projection.character_threshold,
+                    ),
+                )
+                for analysis in projection.analyses_for(attachment_id)
             ],
         )
 
@@ -95,6 +205,9 @@ class MediaAnalysisResponse(BaseModel):
     status: str
     model_name: str
     model_version: str
+    model_revision: str | None
+    model_sha256: str | None
+    preprocessing_version: str | None
     scoring_version: str
     illustration_score: float | None
     general_tags: dict[str, float]
@@ -110,8 +223,12 @@ class MediaAnalysisResponse(BaseModel):
         cls,
         analysis: MediaAnalysis,
         session: Session,
+        *,
+        thresholds: tuple[float, float] | None = None,
     ) -> "MediaAnalysisResponse":
-        general_threshold, character_threshold = _tag_display_thresholds(session)
+        general_threshold, character_threshold = thresholds or _tag_display_thresholds(
+            session,
+        )
         general_tags = _decode_scores(analysis.general_tags_json)
         character_tags = _decode_scores(analysis.character_tags_json)
         return cls(
@@ -119,6 +236,9 @@ class MediaAnalysisResponse(BaseModel):
             status=analysis.status.value,
             model_name=analysis.model_name,
             model_version=analysis.model_version,
+            model_revision=analysis.model_revision,
+            model_sha256=analysis.model_sha256,
+            preprocessing_version=analysis.preprocessing_version,
             scoring_version=analysis.scoring_version,
             illustration_score=analysis.illustration_score,
             general_tags=_filter_scores(
@@ -141,10 +261,12 @@ class MediaAnalysisResponse(BaseModel):
         cls,
         analysis: MediaAnalysis | None,
         session: Session,
+        *,
+        thresholds: tuple[float, float] | None = None,
     ) -> "MediaAnalysisResponse | None":
         if analysis is None:
             return None
-        return cls.from_analysis(analysis, session)
+        return cls.from_analysis(analysis, session, thresholds=thresholds)
 
 
 class ItemSummary(BaseModel):
@@ -173,10 +295,20 @@ class ItemSummary(BaseModel):
     media_unlabeled_count: int
 
     @classmethod
-    def from_db(cls, item: ReviewItem, session: Session) -> "ItemSummary":
-        preview_urls = get_preview_urls(session, item.id)
-        analysis = get_item_analysis_summary(session, item.id)
-        counts = attachment_counts(session, item.id)
+    def from_db(
+        cls,
+        item: ReviewItem,
+        session: Session,
+        projection: ResponseProjection | None = None,
+    ) -> "ItemSummary":
+        projection = projection or ResponseProjection.load(session, [item.id])
+        attachments = projection.attachments_by_item.get(item.id, [])
+        preview_urls = [
+            attachment.preview_url or attachment.download_url
+            for attachment in attachments
+        ]
+        analysis = projection.item_analysis_summary(item.id)
+        counts = _attachment_counts(attachments)
         return cls(
             id=item.id,
             source=item.source,
@@ -214,14 +346,20 @@ class ItemDetail(ItemSummary):
     media: list[MediaAttachmentResponse]
 
     @classmethod
-    def from_db(cls, item: ReviewItem, session: Session) -> "ItemDetail":
-        attachments = get_media_attachments(session, item.id)
+    def from_db(
+        cls,
+        item: ReviewItem,
+        session: Session,
+        projection: ResponseProjection | None = None,
+    ) -> "ItemDetail":
+        projection = projection or ResponseProjection.load(session, [item.id])
+        attachments = projection.attachments_by_item.get(item.id, [])
         return cls(
-            **ItemSummary.from_db(item, session).model_dump(),
+            **ItemSummary.from_db(item, session, projection).model_dump(),
             download_error=item.download_error,
-            source_urls=get_source_urls(session, item.id),
+            source_urls=[attachment.download_url for attachment in attachments],
             media=[
-                MediaAttachmentResponse.from_db(attachment, session)
+                MediaAttachmentResponse.from_db(attachment, session, projection)
                 for attachment in attachments
             ],
         )
@@ -271,8 +409,14 @@ class MediaItemResponse(BaseModel):
         attachment: MediaAttachment,
         item: ReviewItem,
         session: Session,
+        projection: ResponseProjection | None = None,
     ) -> "MediaItemResponse":
         attachment_id = _persisted_attachment_id(attachment)
+        projection = projection or ResponseProjection.load(
+            session,
+            [item.id],
+            attachments=[attachment],
+        )
         preview_url = attachment.preview_url or attachment.download_url
         localized_preview_url = localize_preview_url(
             item.id,
@@ -309,21 +453,30 @@ class MediaItemResponse(BaseModel):
             approval_status=approval_status_api(attachment.approval_status),
             illustration_label=attachment.illustration_label.value,
             analysis=MediaAnalysisResponse.from_db(
-                get_attachment_analysis(session, attachment_id),
+                projection.active_analysis_for(attachment_id),
                 session,
+                thresholds=(
+                    projection.general_threshold,
+                    projection.character_threshold,
+                ),
             ),
             analyses=[
-                MediaAnalysisResponse.from_analysis(analysis, session)
-                for analysis in get_attachment_analyses(session, attachment_id)
+                MediaAnalysisResponse.from_analysis(
+                    analysis,
+                    session,
+                    thresholds=(
+                        projection.general_threshold,
+                        projection.character_threshold,
+                    ),
+                )
+                for analysis in projection.analyses_for(attachment_id)
             ],
         )
 
 
 class MediaListResponse(BaseModel):
     media: list[MediaItemResponse]
-    total: int
     limit: int
-    offset: int
     next_cursor: str | None = None
 
 
@@ -368,6 +521,29 @@ def _tag_display_thresholds(session: Session) -> tuple[float, float]:
     return (
         settings.general_tag_display_threshold,
         settings.character_tag_display_threshold,
+    )
+
+
+def _attachment_counts(
+    attachments: list[MediaAttachment],
+) -> MediaDecisionCounts:
+    return MediaDecisionCounts(
+        approved=sum(
+            attachment.approval_status == ApprovalStatus.APPROVED
+            for attachment in attachments
+        ),
+        rejected=sum(
+            attachment.approval_status == ApprovalStatus.REJECTED
+            for attachment in attachments
+        ),
+        under_review=sum(
+            attachment.approval_status == ApprovalStatus.UNDER_REVIEW
+            for attachment in attachments
+        ),
+        unlabeled=sum(
+            attachment.illustration_label == IllustrationLabel.UNLABELED
+            for attachment in attachments
+        ),
     )
 
 

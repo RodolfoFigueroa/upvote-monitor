@@ -10,8 +10,25 @@ from upvote_monitor.services.preview_cache import delete_item_preview_cache
 DECISION_UNDO_GRACE_PERIOD = timedelta(seconds=8)
 
 
-class ReopenMediaConflictError(Exception):
-    """Raised when a media item cannot be reopened for review."""
+class ApprovalTransitionConflictError(Exception):
+    """Raised when approval is immutable for the item's download state."""
+
+
+# Kept as an alias for service callers that handled the narrower reopen conflict.
+ReopenMediaConflictError = ApprovalTransitionConflictError
+
+
+APPROVAL_TRANSITION_CONFLICT = (
+    "Approval cannot be changed while download is in progress or completed"
+)
+
+
+def _ensure_approval_is_editable(item: ReviewItem) -> None:
+    if item.download_status in (
+        DownloadStatus.IN_PROGRESS,
+        DownloadStatus.COMPLETED,
+    ):
+        raise ApprovalTransitionConflictError(APPROVAL_TRANSITION_CONFLICT)
 
 
 def _elapsed_since(value: datetime) -> timedelta:
@@ -90,6 +107,11 @@ def recompute_item_approval_status(session: Session, item_id: str) -> ReviewItem
     else:
         item.download_ready_at = None
 
+    if previous_status != item.approval_status:
+        item.download_error = None
+        if item.download_status == DownloadStatus.FAILED:
+            item.download_status = DownloadStatus.PENDING
+
     session.add(item)
     if (
         previous_status == ApprovalStatus.UNDER_REVIEW
@@ -104,6 +126,7 @@ def set_item_media_approval(
     item: ReviewItem,
     status: ApprovalStatus,
 ) -> ReviewItem:
+    _ensure_approval_is_editable(item)
     decided_at = utc_now() if status != ApprovalStatus.UNDER_REVIEW else None
     attachments = session.exec(
         select(MediaAttachment).where(MediaAttachment.item_id == item.id),
@@ -124,6 +147,12 @@ def set_media_decision(
     approval_status: ApprovalStatus | None = None,
     illustration_label: IllustrationLabel | None = None,
 ) -> ReviewItem | None:
+    item = session.get(ReviewItem, attachment.item_id)
+    if item is None:
+        return None
+    if approval_status is not None:
+        _ensure_approval_is_editable(item)
+
     if approval_status is not None:
         attachment.approval_status = approval_status
         attachment.decided_at = (
@@ -134,6 +163,8 @@ def set_media_decision(
 
     session.add(attachment)
     session.flush()
+    if approval_status is None:
+        return item
     return recompute_item_approval_status(session, attachment.item_id)
 
 
@@ -145,9 +176,7 @@ def reopen_media_for_review(
     if item is None:
         return None
 
-    if item.download_status == DownloadStatus.IN_PROGRESS:
-        msg = "Cannot reopen media while download is in progress"
-        raise ReopenMediaConflictError(msg)
+    _ensure_approval_is_editable(item)
 
     if attachment.approval_status == ApprovalStatus.APPROVED:
         decided_at = attachment.decided_at
@@ -156,7 +185,7 @@ def reopen_media_for_review(
             or _elapsed_since(decided_at) > DECISION_UNDO_GRACE_PERIOD
         ):
             msg = "Approved media can only be reopened during the undo window"
-            raise ReopenMediaConflictError(msg)
+            raise ApprovalTransitionConflictError(msg)
 
     if attachment.approval_status == ApprovalStatus.UNDER_REVIEW:
         return item
@@ -165,8 +194,6 @@ def reopen_media_for_review(
     attachment.decided_at = None
     session.add(attachment)
 
-    if item.download_status == DownloadStatus.COMPLETED:
-        item.download_status = DownloadStatus.PENDING
     item.download_ready_at = None
     session.add(item)
     session.flush()
@@ -177,9 +204,7 @@ def reopen_rejected_media_for_item(
     session: Session,
     item: ReviewItem,
 ) -> ReviewItem:
-    if item.download_status == DownloadStatus.IN_PROGRESS:
-        msg = "Cannot reopen media while download is in progress"
-        raise ReopenMediaConflictError(msg)
+    _ensure_approval_is_editable(item)
 
     attachments = session.exec(
         select(MediaAttachment)
@@ -194,8 +219,6 @@ def reopen_rejected_media_for_item(
         attachment.decided_at = None
         session.add(attachment)
 
-    if item.download_status == DownloadStatus.COMPLETED:
-        item.download_status = DownloadStatus.PENDING
     item.download_ready_at = None
     session.add(item)
     session.flush()

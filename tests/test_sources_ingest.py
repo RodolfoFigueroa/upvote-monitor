@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,10 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import requests
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
 from upvote_monitor.db.models import (
     AppSettings,
@@ -48,18 +48,6 @@ if TYPE_CHECKING:
 
 ENCRYPTION_KEY = "test-provider-key"
 AUTH_VALUE = "auth"
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 def test_reddit_child_is_normalized_to_source_item() -> None:
@@ -176,6 +164,66 @@ def test_ingest_stores_generic_items_and_applies_rules(engine: Engine) -> None:
     assert item_status == ApprovalStatus.APPROVED
     assert attachment_item_id == item_id
     assert attachment_download_url == "https://example.com/source.jpg"
+
+
+def test_ingest_deduplicates_by_provider_key_and_within_refresh(
+    engine: Engine,
+) -> None:
+    base_item = next(FakeProvider().iter_liked_items())
+
+    class BatchProvider:
+        def __init__(self, source: str, items: list[SourceItem]) -> None:
+            self.source = source
+            self.items = items
+
+        def iter_liked_items(self) -> Iterator[SourceItem]:
+            yield from self.items
+
+    archived = replace(base_item, source="reddit", source_item_id="archived")
+    batch_duplicate = replace(base_item, source="reddit", source_item_id="batch")
+    reddit_shared = replace(base_item, source="reddit", source_item_id="shared")
+    x_shared = replace(base_item, source="x", source_item_id="shared")
+
+    with Session(engine) as session:
+        session.add(AppSettings(id=1))
+        session.add(
+            ReviewItem(
+                id="reddit_archived",
+                source="reddit",
+                source_item_id="archived",
+                title="Archived",
+                item_kind="image",
+                source_url="https://example.com/archived",
+                created_at=datetime.now(UTC),
+                approval_status=ApprovalStatus.UNDER_REVIEW,
+                raw_data_json="{}",
+                media_count=1,
+            ),
+        )
+        session.commit()
+
+        result = ingest_items(
+            session,
+            providers=[
+                BatchProvider(
+                    "reddit",
+                    [archived, batch_duplicate, batch_duplicate, reddit_shared],
+                ),
+                BatchProvider("mixed", [x_shared, batch_duplicate]),
+            ],
+        )
+        stored_keys = set(
+            session.exec(select(ReviewItem.source, ReviewItem.source_item_id)).all(),
+        )
+
+    assert result.new_items == 3
+    assert result.skipped == 3
+    assert stored_keys == {
+        ("reddit", "archived"),
+        ("reddit", "batch"),
+        ("reddit", "shared"),
+        ("x", "shared"),
+    }
 
 
 class XFakeProvider:
@@ -791,6 +839,59 @@ def test_reddit_upvoted_response_accepts_poll_data_object() -> None:
     child = response.data.children[0]
     assert child.data.post_hint == "no_media"
     assert child.data.poll_data == poll_data
+
+
+@pytest.fixture
+def reddit_response_with_unknown_fields() -> dict[str, Any]:
+    child_data = _reddit_no_media_child_data(upstream_child_addition="ignored")
+    return {
+        "kind": "Listing",
+        "upstream_envelope_addition": {"anything": True},
+        "data": {
+            "after": None,
+            "before": None,
+            "children": [
+                {
+                    "kind": "t3",
+                    "upstream_wrapper_addition": 42,
+                    "data": child_data,
+                },
+            ],
+            "dist": 1,
+            "geo_filter": "",
+            "modhash": "",
+            "upstream_listing_addition": ["new"],
+        },
+    }
+
+
+def test_reddit_response_ignores_unknown_upstream_fields(
+    reddit_response_with_unknown_fields: dict[str, Any],
+) -> None:
+    response = UpvotedResponse.model_validate(reddit_response_with_unknown_fields)
+
+    assert response.data.children[0].data.title == "A poll"
+    assert "upstream_envelope_addition" not in response.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("title", None), ("score", "not-an-integer")],
+)
+def test_reddit_response_rejects_missing_or_invalid_consumed_fields(
+    reddit_response_with_unknown_fields: dict[str, Any],
+    field: str,
+    invalid_value: JsonValue,
+) -> None:
+    child = reddit_response_with_unknown_fields["data"]["children"][0]["data"]
+    assert isinstance(child, dict)
+    if invalid_value is None:
+        child.pop(field)
+    else:
+        child[field] = invalid_value
+
+    with pytest.raises(ValidationError):
+        UpvotedResponse.model_validate(reddit_response_with_unknown_fields)
 
 
 def test_reddit_upvoted_generator_stops_at_page_limit(

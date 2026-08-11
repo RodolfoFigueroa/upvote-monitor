@@ -12,6 +12,7 @@ from upvote_monitor.services.refresh import (
     RefreshAlreadyRunningError,
     create_refresh_run,
     execute_refresh_run,
+    fail_queued_refresh,
 )
 
 JOB_ID = "scheduled_refresh"
@@ -90,12 +91,21 @@ def queue_refresh_run() -> str | None:
             return None
 
     scheduler = get_scheduler()
-    scheduler.add_job(
-        _execute_refresh_run,
-        DateTrigger(run_date=datetime.now(UTC)),
-        args=[run.id],
-        id=f"refresh_{run.id}",
-    )
+    try:
+        scheduler.add_job(
+            _execute_refresh_run,
+            DateTrigger(run_date=datetime.now(UTC)),
+            args=[run.id],
+            id=f"refresh_{run.id}",
+        )
+    except Exception as exc:
+        with Session(engine) as session:
+            fail_queued_refresh(
+                session,
+                run.id,
+                f"Scheduler submission failed: {type(exc).__name__}: {exc}",
+            )
+        raise
     return run.id
 
 

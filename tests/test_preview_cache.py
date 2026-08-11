@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session
 
 from upvote_monitor.api.items import approve_item, get_item_preview, reject_item
 from upvote_monitor.db.models import (
@@ -25,18 +24,6 @@ from upvote_monitor.enums import (
 from upvote_monitor.schemas.items import ItemSummary
 from upvote_monitor.services import preview_cache
 from upvote_monitor.services.approval import recompute_pending_items_for_rule
-
-
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
 
 
 @pytest.fixture
@@ -274,17 +261,9 @@ def test_preview_endpoint_removes_partial_oversized_downloads(
 
 
 def test_approve_and_reject_delete_preview_cache(
-    monkeypatch: pytest.MonkeyPatch,
     preview_cache_dir: Path,
     engine: Engine,
 ) -> None:
-    monkeypatch.setattr("upvote_monitor.schemas.items.get_preview_urls", lambda *_: [])
-    monkeypatch.setattr("upvote_monitor.schemas.items.get_source_urls", lambda *_: [])
-    monkeypatch.setattr(
-        "upvote_monitor.schemas.items.get_media_attachments",
-        lambda *_: [],
-    )
-
     with Session(engine) as session:
         for item_id in ("approve-cache", "reject-cache"):
             session.add(make_item(item_id))

@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, NotRequired, TypedDict, Unpack
@@ -8,8 +7,7 @@ import pytest
 from fastapi import BackgroundTasks
 from PIL import Image
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine, select
+from sqlmodel import Session, select
 
 import upvote_monitor.services.tagging.pixai_tagger as pixai_tagger_module
 from upvote_monitor.api.items import analyze_item_endpoint
@@ -43,7 +41,11 @@ from upvote_monitor.services.tagging.pixai_tagger import (
 )
 from upvote_monitor.services.tagging.profiles import (
     BUILT_IN_ANALYSIS_PROFILES,
+    PIXAI_V0_9_ONNX_PROFILE_ID,
+    PIXAI_V0_9_ONNX_REVISION,
     SCORING_VERSION,
+    WD_EVA02_LARGE_V3_PROFILE_ID,
+    WD_VIT_LARGE_V3_PROFILE_ID,
     ensure_default_analysis_profiles,
 )
 from upvote_monitor.services.tagging.scoring import score_illustration
@@ -59,21 +61,9 @@ from upvote_monitor.services.tagging.wd_tagger import (
 TEST_PROFILE_ID = "fake-wd-default"
 
 
-@pytest.fixture
-def engine() -> Iterator[Engine]:
-    db_engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(db_engine)
-    yield db_engine
-    db_engine.dispose()
-
-
 class FakeTagger:
     model_name = "fake/wd"
-    model_version = "test"
+    model_version = "0123456789abcdef0123456789abcdef01234567"
 
     def __init__(self, result: WDTaggerResult | None = None) -> None:
         self.result = result or WDTaggerResult(
@@ -165,6 +155,9 @@ def add_settings(session: Session, **options: Unpack[SettingsOptions]) -> None:
             name="Fake WD",
             model_name=FakeTagger.model_name,
             model_version=FakeTagger.model_version,
+            model_revision="0123456789abcdef0123456789abcdef01234567",
+            model_sha256="a" * 64,
+            preprocessing_version="fake-preprocessing-v1",
             scoring_version=SCORING_VERSION,
             general_tag_storage_threshold=general_storage_threshold,
             character_tag_storage_threshold=character_storage_threshold,
@@ -233,17 +226,25 @@ def test_default_analysis_profiles_include_best_smilingwolf_v3_models(
         assert {profile.id for profile in BUILT_IN_ANALYSIS_PROFILES} <= set(profiles)
         assert len(BUILT_IN_ANALYSIS_PROFILES) == 4
         assert profiles[DEFAULT_ANALYSIS_PROFILE_ID].model_name == WD_SWINV2_V3_REPO_ID
-        assert profiles["wd-eva02-large-v3"].model_name == WD_EVA02_LARGE_V3_REPO_ID
-        assert profiles["wd-eva02-large-v3"].auto_approve_threshold == 0.92
-        assert profiles["wd-vit-large-v3"].model_name == WD_VIT_LARGE_V3_REPO_ID
-        assert profiles["wd-vit-large-v3"].auto_approve_threshold == 0.92
-        assert profiles["pixai-v0-9-onnx"].model_name == (
+        assert profiles[WD_EVA02_LARGE_V3_PROFILE_ID].model_name == (
+            WD_EVA02_LARGE_V3_REPO_ID
+        )
+        assert profiles[WD_EVA02_LARGE_V3_PROFILE_ID].auto_approve_threshold == 0.92
+        assert profiles[WD_VIT_LARGE_V3_PROFILE_ID].model_name == (
+            WD_VIT_LARGE_V3_REPO_ID
+        )
+        assert profiles[WD_VIT_LARGE_V3_PROFILE_ID].auto_approve_threshold == 0.92
+        assert profiles[PIXAI_V0_9_ONNX_PROFILE_ID].model_name == (
             PIXAI_TAGGER_V0_9_ONNX_REPO_ID
         )
-        assert profiles["pixai-v0-9-onnx"].general_tag_storage_threshold == 0.30
-        assert profiles["pixai-v0-9-onnx"].character_tag_storage_threshold == 0.85
-        assert profiles["pixai-v0-9-onnx"].auto_approve_threshold == 0.97
-        assert profiles["pixai-v0-9-onnx"].enabled is True
+        assert (
+            profiles[PIXAI_V0_9_ONNX_PROFILE_ID].general_tag_storage_threshold == 0.30
+        )
+        assert (
+            profiles[PIXAI_V0_9_ONNX_PROFILE_ID].character_tag_storage_threshold == 0.85
+        )
+        assert profiles[PIXAI_V0_9_ONNX_PROFILE_ID].auto_approve_threshold == 0.97
+        assert profiles[PIXAI_V0_9_ONNX_PROFILE_ID].enabled is True
         assert "wd-v1-4-vit-v2" not in profiles
         assert WD_COMPATIBLE_MODEL_REPOS == (
             WD_SWINV2_V3_REPO_ID,
@@ -344,7 +345,7 @@ def test_pixai_tagger_maps_onnx_scores_to_general_and_character_tags(
         cache_dir: str,
     ) -> str:
         assert repo_id == PIXAI_TAGGER_V0_9_ONNX_REPO_ID
-        assert revision == "main"
+        assert revision == PIXAI_V0_9_ONNX_REVISION
         assert cache_dir
         return str(paths[filename])
 
@@ -437,6 +438,81 @@ def test_pending_analysis_persists_tags_and_auto_approves(
         assert detail.media[0].analysis.character_tags["hatsune_miku"] == 0.91
 
 
+def test_manual_decision_during_inference_is_not_overwritten(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+    monkeypatch.setattr(
+        "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+        lambda *_args, **_kwargs: preview_path,
+    )
+
+    class DecidingTagger(FakeTagger):
+        def tag_image(self, path: Path) -> WDTaggerResult:
+            with Session(engine) as reviewer_session:
+                attachment = reviewer_session.exec(select(MediaAttachment)).one()
+                attachment.approval_status = ApprovalStatus.REJECTED
+                reviewer_session.add(attachment)
+                reviewer_session.commit()
+            return super().tag_image(path)
+
+    with Session(engine) as session:
+        add_settings(session)
+        item = make_item("concurrent-decision")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        result = process_pending_analysis(session, DecidingTagger())
+
+        session.expire_all()
+        attachment = session.exec(select(MediaAttachment)).one()
+        analysis = session.exec(select(MediaAnalysis)).one()
+        assert result.analyzed == 1
+        assert result.approved == 0
+        assert attachment.approval_status == ApprovalStatus.REJECTED
+        assert analysis.model_revision == "0123456789abcdef0123456789abcdef01234567"
+        assert analysis.model_sha256 == "a" * 64
+        assert analysis.preprocessing_version == "fake-preprocessing-v1"
+
+
+def test_preview_fetch_and_inference_run_without_an_open_transaction(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    preview_path = tmp_path / "preview.jpg"
+    preview_path.write_bytes(b"image")
+
+    with Session(engine) as session:
+
+        def fetch_preview(*_args: object, **_kwargs: object) -> Path:
+            assert not session.in_transaction()
+            return preview_path
+
+        class TransactionCheckingTagger(FakeTagger):
+            def tag_image(self, path: Path) -> WDTaggerResult:
+                assert not session.in_transaction()
+                return super().tag_image(path)
+
+        monkeypatch.setattr(
+            "upvote_monitor.services.tagging.analysis.get_or_fetch_cached_preview",
+            fetch_preview,
+        )
+        add_settings(session, auto_approve_enabled=False)
+        item = make_item("short-transactions")
+        session.add(item)
+        session.add(make_attachment(item.id))
+        session.commit()
+
+        result = process_pending_analysis(session, TransactionCheckingTagger())
+
+        assert result.analyzed == 1
+
+
 def test_pending_analysis_uses_selected_eva02_profile(
     engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
@@ -460,7 +536,7 @@ def test_pending_analysis_uses_selected_eva02_profile(
                 download_base_dir="/download",
                 illustration_tagger_enabled=True,
                 illustration_auto_approve_enabled=False,
-                active_analysis_profile_id="wd-eva02-large-v3",
+                active_analysis_profile_id=WD_EVA02_LARGE_V3_PROFILE_ID,
             ),
         )
         item = make_item("eva-profile")
@@ -472,7 +548,7 @@ def test_pending_analysis_uses_selected_eva02_profile(
 
         analysis = session.exec(select(MediaAnalysis)).one()
         assert result.analyzed == 1
-        assert analysis.analysis_profile_id == "wd-eva02-large-v3"
+        assert analysis.analysis_profile_id == WD_EVA02_LARGE_V3_PROFILE_ID
         assert analysis.model_name == WD_EVA02_LARGE_V3_REPO_ID
         assert analysis.scoring_version == SCORING_VERSION
 
@@ -510,7 +586,7 @@ def test_pending_analysis_uses_selected_pixai_profile(
                 download_base_dir="/download",
                 illustration_tagger_enabled=True,
                 illustration_auto_approve_enabled=False,
-                active_analysis_profile_id="pixai-v0-9-onnx",
+                active_analysis_profile_id=PIXAI_V0_9_ONNX_PROFILE_ID,
             ),
         )
         item = make_item("pixai-profile")
@@ -522,8 +598,8 @@ def test_pending_analysis_uses_selected_pixai_profile(
 
         analysis = session.exec(select(MediaAnalysis)).one()
         assert result.analyzed == 1
-        assert calls == [(PIXAI_TAGGER_V0_9_ONNX_REPO_ID, "main")]
-        assert analysis.analysis_profile_id == "pixai-v0-9-onnx"
+        assert calls == [(PIXAI_TAGGER_V0_9_ONNX_REPO_ID, PIXAI_V0_9_ONNX_REVISION)]
+        assert analysis.analysis_profile_id == PIXAI_V0_9_ONNX_PROFILE_ID
         assert analysis.model_name == PIXAI_TAGGER_V0_9_ONNX_REPO_ID
         assert analysis.scoring_version == SCORING_VERSION
 

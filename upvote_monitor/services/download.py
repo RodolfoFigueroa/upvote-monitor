@@ -1,10 +1,15 @@
+import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any
+from uuid import uuid4
 
-from sqlalchemy import ColumnElement, or_, update
+from sqlalchemy import ColumnElement, Connection, Engine, and_, or_, update
 from sqlmodel import Session, col, select
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
@@ -18,6 +23,13 @@ from upvote_monitor.services.media_workflow import (
     approval_status_api,
     approved_media_attachments,
     item_has_under_review_media,
+)
+
+logger = logging.getLogger(__name__)
+DOWNLOAD_LEASE_DURATION = timedelta(minutes=2)
+DOWNLOAD_HEARTBEAT_INTERVAL_SECONDS = 15.0
+DOWNLOAD_INTERRUPTED_ERROR = (
+    "Interrupted: application stopped before the download completed; retry the download"
 )
 
 
@@ -69,6 +81,50 @@ def _download_ready_filter(now: datetime) -> ColumnElement[bool]:
     )
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def reconcile_abandoned_downloads(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+) -> int:
+    """Return downloads with expired leases to the retryable failed state."""
+    current = (now or _utc_now()).replace(tzinfo=None)
+    cutoff = current - DOWNLOAD_LEASE_DURATION
+    no_heartbeat = and_(
+        col(ReviewItem.download_heartbeat_at).is_(None),
+        or_(
+            col(ReviewItem.download_claimed_at) < cutoff,
+            and_(
+                col(ReviewItem.download_claimed_at).is_(None),
+                col(ReviewItem.discovered_at) < cutoff,
+            ),
+        ),
+    )
+    statement = update(ReviewItem).where(
+        col(ReviewItem.download_status) == DownloadStatus.IN_PROGRESS,
+    )
+    if not force:
+        statement = statement.where(
+            or_(col(ReviewItem.download_heartbeat_at) < cutoff, no_heartbeat),
+        )
+    result: Any = session.exec(
+        statement.values(
+            download_status=DownloadStatus.FAILED,
+            download_error=DOWNLOAD_INTERRUPTED_ERROR,
+            download_claim_token=None,
+            download_claimed_at=None,
+            download_heartbeat_at=None,
+        ).execution_options(synchronize_session=False),
+    )
+    session.commit()
+    session.expire_all()
+    return int(result.rowcount)
+
+
 def _seconds_until_download_ready(item: ReviewItem) -> float:
     if item.download_ready_at is None:
         return 0
@@ -86,8 +142,12 @@ def claim_item_for_download(
     *,
     ignore_ready_at: bool = False,
 ) -> ReviewItem | None:
+    reconcile_abandoned_downloads(session)
     if item_has_under_review_media(session, item_id):
         return None
+
+    now = _utc_now()
+    claim_token = str(uuid4())
 
     statement = (
         update(ReviewItem)
@@ -109,6 +169,9 @@ def claim_item_for_download(
             download_status=DownloadStatus.IN_PROGRESS,
             download_ready_at=None,
             download_error=None,
+            download_claim_token=claim_token,
+            download_claimed_at=now,
+            download_heartbeat_at=now,
         ).execution_options(synchronize_session=False),
     )
     session.commit()
@@ -123,6 +186,48 @@ def claim_item_for_download(
     session.refresh(item)
     _broadcast_item_updated(item)
     return item
+
+
+def _heartbeat_download(
+    bind: Engine | Connection,
+    item_id: str,
+    claim_token: str,
+) -> None:
+    with Session(bind) as heartbeat_session:
+        heartbeat_session.exec(
+            update(ReviewItem)
+            .where(
+                col(ReviewItem.id) == item_id,
+                col(ReviewItem.download_status) == DownloadStatus.IN_PROGRESS,
+                col(ReviewItem.download_claim_token) == claim_token,
+            )
+            .values(download_heartbeat_at=_utc_now()),
+        )
+        heartbeat_session.commit()
+
+
+@contextmanager
+def _download_heartbeat(
+    bind: Engine | Connection,
+    item_id: str,
+    claim_token: str,
+) -> Iterator[None]:
+    stopped = Event()
+
+    def heartbeat_loop() -> None:
+        while not stopped.wait(DOWNLOAD_HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                _heartbeat_download(bind, item_id, claim_token)
+            except Exception:
+                logger.exception("Could not heartbeat download for item %s", item_id)
+
+    thread = Thread(target=heartbeat_loop, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join()
 
 
 def _wait_until_download_ready(item_id: str) -> None:
@@ -158,29 +263,63 @@ def _download_claimed_item(
     item: ReviewItem,
     download_base_dir: str,
 ) -> None:
+    claim_token = item.download_claim_token
+    if claim_token is None:
+        return
     target_dir = Path(download_base_dir) / item.id
 
+    values: dict[str, object]
     try:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        attachments = approved_media_attachments(session, item.id)
+        bind = session.get_bind()
+        attachments = [
+            attachment.model_copy()
+            for attachment in approved_media_attachments(session, item.id)
+        ]
         _ensure_download_attachments(attachments)
+        # Leave no read transaction open while the separate lease writer runs.
+        session.commit()
+        with _download_heartbeat(bind, item.id, claim_token):
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for attachment in attachments:
+                target_path = target_dir / f"{attachment.sort_index:02d}"
+                _download_attachment_to_path(attachment, target_path)
 
-        for attachment in attachments:
-            target_path = target_dir / f"{attachment.sort_index:02d}"
-            _download_attachment_to_path(attachment, target_path)
-
-        item.download_status = DownloadStatus.COMPLETED
-        item.downloaded_at = datetime.now(UTC)
-        item.download_dir = str(target_dir.resolve())
-        item.download_error = None
+        values = {
+            "download_status": DownloadStatus.COMPLETED,
+            "downloaded_at": _utc_now(),
+            "download_dir": str(target_dir.resolve()),
+            "download_error": None,
+        }
     except (DownloadError, OSError, RuntimeError, ValueError) as exc:
-        item.download_status = DownloadStatus.FAILED
-        item.download_error = str(exc)
+        values = {
+            "download_status": DownloadStatus.FAILED,
+            "download_error": str(exc),
+        }
 
-    session.add(item)
+    values.update(
+        download_claim_token=None,
+        download_claimed_at=None,
+        download_heartbeat_at=None,
+    )
+    result: Any = session.exec(
+        update(ReviewItem)
+        .where(
+            col(ReviewItem.id) == item.id,
+            col(ReviewItem.download_status) == DownloadStatus.IN_PROGRESS,
+            col(ReviewItem.download_claim_token) == claim_token,
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False),
+    )
     session.commit()
-    session.refresh(item)
-    _broadcast_item_updated(item)
+    session.expire_all()
+    if result.rowcount != 1:
+        return
+    refreshed_item = session.get(ReviewItem, item.id)
+    if refreshed_item is None:
+        return
+    session.refresh(refreshed_item)
+    _broadcast_item_updated(refreshed_item)
 
 
 def _ensure_download_attachments(
@@ -219,6 +358,7 @@ def process_pending_downloads(
     *,
     wait_until_ready: bool = True,
 ) -> DownloadBatchResult:
+    reconcile_abandoned_downloads(session)
     settings = session.get(AppSettings, 1)
     if settings is None:
         msg = "App settings not initialized"

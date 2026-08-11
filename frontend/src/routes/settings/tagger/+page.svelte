@@ -137,7 +137,9 @@
   }
 
   function profileLine(profile: AnalysisProfile): string {
-    return `${profile.model_version} - ${profile.scoring_version} - approve ${percent(profile.auto_approve_threshold)}`;
+    const revision = profile.model_revision?.slice(0, 12) ?? profile.model_version;
+    const checksum = profile.model_sha256?.slice(0, 12) ?? 'unknown checksum';
+    return `${revision} - sha256 ${checksum} - ${profile.preprocessing_version ?? 'unknown preprocessing'} - ${profile.scoring_version} - approve ${percent(profile.auto_approve_threshold)}`;
   }
 
   useUnsavedChanges(hasUnsavedChanges);
