@@ -119,6 +119,13 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
+        "uq_refresh_runs_one_active",
+        "refresh_runs",
+        [sa.literal_column("1")],
+        unique=True,
+        sqlite_where=sa.text("status IN ('QUEUED', 'RUNNING')"),
+    )
+    op.create_index(
         op.f("ix_refresh_runs_claim_token"),
         "refresh_runs",
         ["claim_token"],
@@ -484,6 +491,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_review_items_community_name"), table_name="review_items")
     op.drop_index(op.f("ix_review_items_author_name"), table_name="review_items")
     op.drop_table("review_items")
+    op.drop_index("uq_refresh_runs_one_active", table_name="refresh_runs")
     op.drop_index(op.f("ix_refresh_runs_heartbeat_at"), table_name="refresh_runs")
     op.drop_index(op.f("ix_refresh_runs_claim_token"), table_name="refresh_runs")
     op.drop_index("ix_refresh_runs_active", table_name="refresh_runs")

@@ -4,16 +4,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
 from upvote_monitor.api.router import api_router
 from upvote_monitor.config import settings
-from upvote_monitor.db.engine import init_db
+from upvote_monitor.db.engine import engine, init_db
 from upvote_monitor.scheduler import (
     queue_refresh_run,
     shutdown_scheduler,
     start_scheduler,
 )
+from upvote_monitor.services.download import reconcile_abandoned_downloads
 from upvote_monitor.services.event_bus import set_event_loop
+from upvote_monitor.services.refresh import reconcile_abandoned_refreshes
 from upvote_monitor.spa import STATIC_DIR, SPAStaticFiles
 
 __all__ = ["app", "create_app", "settings"]
@@ -23,6 +26,10 @@ __all__ = ["app", "create_app", "settings"]
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     set_event_loop(asyncio.get_running_loop())
     should_queue_initial_refresh = init_db()
+    with Session(engine) as session:
+        # A fresh application process cannot own claims left by its predecessor.
+        reconcile_abandoned_refreshes(session, force=True)
+        reconcile_abandoned_downloads(session, force=True)
     start_scheduler()
     if should_queue_initial_refresh:
         queue_refresh_run()

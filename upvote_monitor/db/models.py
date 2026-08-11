@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Column, Index, Text, UniqueConstraint
+from sqlalchemy import Column, Index, Text, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 from upvote_monitor.enums import (
@@ -210,6 +210,12 @@ class RefreshRun(SQLModel, table=True):
     __tablename__ = "refresh_runs"
     __table_args__ = (
         Index("ix_refresh_runs_active", "status", "heartbeat_at", "started_at"),
+        Index(
+            "uq_refresh_runs_one_active",
+            text("1"),
+            unique=True,
+            sqlite_where=text("status IN ('QUEUED', 'RUNNING')"),
+        ),
     )
 
     id: str = Field(primary_key=True, default_factory=lambda: str(uuid4()))
