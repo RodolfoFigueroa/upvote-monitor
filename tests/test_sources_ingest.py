@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import requests
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
@@ -839,6 +839,59 @@ def test_reddit_upvoted_response_accepts_poll_data_object() -> None:
     child = response.data.children[0]
     assert child.data.post_hint == "no_media"
     assert child.data.poll_data == poll_data
+
+
+@pytest.fixture
+def reddit_response_with_unknown_fields() -> dict[str, Any]:
+    child_data = _reddit_no_media_child_data(upstream_child_addition="ignored")
+    return {
+        "kind": "Listing",
+        "upstream_envelope_addition": {"anything": True},
+        "data": {
+            "after": None,
+            "before": None,
+            "children": [
+                {
+                    "kind": "t3",
+                    "upstream_wrapper_addition": 42,
+                    "data": child_data,
+                },
+            ],
+            "dist": 1,
+            "geo_filter": "",
+            "modhash": "",
+            "upstream_listing_addition": ["new"],
+        },
+    }
+
+
+def test_reddit_response_ignores_unknown_upstream_fields(
+    reddit_response_with_unknown_fields: dict[str, Any],
+) -> None:
+    response = UpvotedResponse.model_validate(reddit_response_with_unknown_fields)
+
+    assert response.data.children[0].data.title == "A poll"
+    assert "upstream_envelope_addition" not in response.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("title", None), ("score", "not-an-integer")],
+)
+def test_reddit_response_rejects_missing_or_invalid_consumed_fields(
+    reddit_response_with_unknown_fields: dict[str, Any],
+    field: str,
+    invalid_value: JsonValue,
+) -> None:
+    child = reddit_response_with_unknown_fields["data"]["children"][0]["data"]
+    assert isinstance(child, dict)
+    if invalid_value is None:
+        child.pop(field)
+    else:
+        child[field] = invalid_value
+
+    with pytest.raises(ValidationError):
+        UpvotedResponse.model_validate(reddit_response_with_unknown_fields)
 
 
 def test_reddit_upvoted_generator_stops_at_page_limit(
