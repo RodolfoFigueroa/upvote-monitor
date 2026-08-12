@@ -28,6 +28,15 @@ Start the single supported process with:
 docker compose -f docker/docker-compose-dev.yml up --build -d
 ```
 
+Versioned release images are published for `linux/amd64` at
+`ghcr.io/rodolfofigueroa/upvote-monitor`. Pull a fixed release for reproducible
+deployments, or `latest` for the newest stable release:
+
+```console
+docker pull ghcr.io/rodolfofigueroa/upvote-monitor:1.0.0
+docker pull ghcr.io/rodolfofigueroa/upvote-monitor:latest
+```
+
 Do not lose or rotate `UPVOTE_MONITOR_SECRET_KEY` while encrypted source
 credentials are still needed. Credentials are encrypted in SQLite and are never
 returned by the API.
@@ -122,5 +131,6 @@ Verify the frontend separately:
 ```console
 npm ci --prefix frontend
 npm --prefix frontend run check
+npm --prefix frontend run test
 npm --prefix frontend run build
 ```
