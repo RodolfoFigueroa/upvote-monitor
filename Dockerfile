@@ -16,6 +16,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY upvote_monitor/ ./upvote_monitor/
+COPY migrations/ ./migrations/
+COPY alembic.ini ./alembic.ini
 COPY main.py ./main.py
 
 RUN uv sync --frozen --no-dev
